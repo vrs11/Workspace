@@ -1,0 +1,8 @@
+src/generated/
+generated/
+node_modules/
+dist/
+artifacts/
+.tools/
+THIRD_PARTY_NOTICES.md
+pnpm-lock.yaml

@@ -1,0 +1,5 @@
+* text=auto eol=lf
+# Upstream byte-for-byte provenance includes its original line endings.
+patches/** -text
+# Unified diff context includes intentional space-only lines.
+patches/*.patch -whitespace

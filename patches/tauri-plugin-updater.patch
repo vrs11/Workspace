@@ -1,0 +1,25 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -196,6 +196,6 @@
+ ]
+ 
+ [target.'cfg(target_os = "windows")'.dependencies.zip]
+-version = "4"
+-optional = true
+-default-features = false
++version = "=9.0.0"
++optional = true
++default-features = false
+--- /dev/null
++++ b/PATCHES.md
+@@ -0,0 +1,10 @@
++# Local dependency patch
++
++Upstream: tauri-plugin-updater 2.14.0 from the locked crates.io archive.
++Archive SHA-256: `7259989d4fe11b2bf51f7d671642249b1837c4ae2da1430dc713ae38f98ceeec`.
++
++Only functional change: Windows optional zip dependency 4 → exactly 9.0.0,
++the patched release for RUSTSEC-2026-0367/0368/0369. The updater implementation,
++signature verification, installer flow and public API are unchanged. Both upstream
++licenses are retained. Review/remove this patch when a compatible Tauri 2 release
++selects a fixed zip. Native signed-update validation remains a release gate.

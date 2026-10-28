@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Workspace",
+  "version": "0.1.0",
+  "identifier": "org.agentworkspace.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm exec vite",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build:web",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "dragDropEnabled": false,
+        "title": "Workspace",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 800,
+        "minHeight": 560,
+        "create": false
+      }
+    ],
+    "security": {
+      "capabilities": ["main"],
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: workspace-media: http://workspace-media.localhost; media-src workspace-media: http://workspace-media.localhost; font-src 'self' data:; worker-src 'self' blob:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "targets": ["app"],
+    "category": "DeveloperTool",
+    "shortDescription": "Local editor, terminal and graphical Git workspace",
+    "copyright": "Copyright 2026 Workspace contributors",
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    },
+    "resources": {
+      "../LICENSE": "LICENSE.txt",
+      "../artifacts/legal/THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../artifacts/legal/sbom.cdx.json": "sbom.cdx.json",
+      "../artifacts/legal/third-party-sources/*": "third-party-sources/"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "requireSignedVersion": true,
+      "allowDowngrades": false,
+      "pubkey": "",
+      "endpoints": []
+    }
+  }
+}

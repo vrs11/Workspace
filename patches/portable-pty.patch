@@ -1,0 +1,80 @@
+--- a/src/cmdbuilder.rs
++++ b/src/cmdbuilder.rs
+@@ -207,6 +207,9 @@
+     #[cfg(unix)]
+     pub(crate) umask: Option<libc::mode_t>,
+     controlling_tty: bool,
++    #[cfg(windows)]
++    #[cfg_attr(feature = "serde_support", serde(default))]
++    pub(crate) start_suspended: bool,
+ }
+ 
+ impl CommandBuilder {
+@@ -220,6 +223,8 @@
+             #[cfg(unix)]
+             umask: None,
+             controlling_tty: true,
++            #[cfg(windows)]
++            start_suspended: false,
+         }
+     }
+ 
+@@ -232,6 +237,8 @@
+             #[cfg(unix)]
+             umask: None,
+             controlling_tty: true,
++            #[cfg(windows)]
++            start_suspended: false,
+         }
+     }
+ 
+@@ -243,6 +250,14 @@
+     /// <https://github.com/flatpak/flatpak/issues/3285>
+     pub fn set_controlling_tty(&mut self, controlling_tty: bool) {
+         self.controlling_tty = controlling_tty;
++    }
++
++    /// Start the Windows primary thread suspended so the caller can assign an
++    /// owned Job Object before any child code runs. The caller must resume or
++    /// terminate the suspended process. Other platforms are unchanged.
++    #[cfg(windows)]
++    pub fn set_start_suspended(&mut self, value: bool) {
++        self.start_suspended = value;
+     }
+ 
+     pub fn get_controlling_tty(&self) -> bool {
+@@ -259,6 +274,8 @@
+             #[cfg(unix)]
+             umask: None,
+             controlling_tty: true,
++            #[cfg(windows)]
++            start_suspended: false,
+         }
+     }
+ 
+--- a/src/win/psuedocon.rs
++++ b/src/win/psuedocon.rs
+@@ -142,7 +142,8 @@
+                 ptr::null_mut(),
+                 ptr::null_mut(),
+                 0,
+-                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
++                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT
++                    | if cmd.start_suspended { winapi::um::winbase::CREATE_SUSPENDED } else { 0 },
+                 cmd.environment_block().as_mut_slice().as_mut_ptr() as *mut _,
+                 cwd.as_ref()
+                     .map(|c| c.as_slice().as_ptr())
+--- /dev/null
++++ b/PATCHES.md
+@@ -0,0 +1,11 @@
++# Local dependency patch
++
++Upstream: portable-pty 0.9.0 from the locked crates.io archive.
++Archive SHA-256: `b4a596a2b3d2752d94f51fac2d4a96737b8705dddd311a32b9af47211f08671e`.
++
++Adds an opt-in Windows-only `CommandBuilder::set_start_suspended` setting,
++default false, forwarded as CREATE_SUSPENDED to the existing ConPTY CreateProcessW.
++The application assigns its Job Object before resuming the owned primary thread.
++This closes the previous post-spawn assignment gap without changing terminal stacks.
++Unix behavior and all other defaults are unchanged. The upstream MIT license is
++retained. Remove the patch when upstream offers an equivalent pre-execution hook.

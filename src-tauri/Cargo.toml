@@ -1,0 +1,80 @@
+[package]
+name = "agent-workspace"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+default-run = "agent-workspace"
+
+[lib]
+name = "agent_workspace"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+desktop-test = ["dep:tauri-plugin-wdio-webdriver", "dep:tauri-plugin-wdio"]
+native-fixtures = []
+
+[[bin]]
+name = "recovery-test-worker"
+path = "../tests/fixtures/recovery-worker.rs"
+required-features = ["native-fixtures"]
+
+[dependencies]
+tauri = { version = "=2.12.5", features = [] }
+tauri-plugin-clipboard-manager = "=2.5.0"
+tauri-plugin-dialog = { version = "=2.8.3", features = [] }
+tauri-plugin-single-instance = { version = "=2.5.4", features = [] }
+tauri-plugin-updater = { version = "=2.14.0", features = [] }
+tauri-plugin-wdio-webdriver = { version = "=1.5.1", features = [], optional = true }
+tokio = { version = "=1.54.1", features = ["full"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.154", features = [] }
+thiserror = { version = "=2.0.21", features = [] }
+tracing = { version = "=0.1.44", features = [] }
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
+ts-rs = { version = "=11.1.0", features = ["serde-compat"] }
+cap-std = { version = "=3.4.6", features = [] }
+cap-fs-ext = { version = "=3.4.6", features = [] }
+notify = { version = "=8.2.1", features = [] }
+ignore = { version = "=0.4.33", features = [] }
+grep-regex = { version = "=0.1.14", features = [] }
+grep-searcher = { version = "=0.1.17", features = [] }
+regex = { version = "=1.13.1", features = [] }
+portable-pty = { version = "=0.9.0", features = [] }
+atomic-write-file = { version = "=0.3.1", features = [] }
+blake3 = { version = "=1.8.7", features = [] }
+uuid = { version = "=1.29.0", features = ["v4", "serde"] }
+tempfile = { version = "=3.27.0", features = [] }
+
+
+tauri-plugin-wdio = { version = "=1.5.1", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+xattr = "=1.6.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.5"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Storage_FileSystem", "Win32_Security_Authorization", "Win32_System_IO", "Win32_System_Ioctl", "Wdk_Foundation", "Wdk_Storage_FileSystem"] }
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+
+[dev-dependencies]
+proptest = "=1.12.0"
+tauri = { version = "=2.12.5", default-features = false, features = ["test"] }
+
+[profile.dev]
+debug = 0
+
+[patch.crates-io]
+tauri-plugin-updater = { path = "../vendor/tauri-plugin-updater" }
+portable-pty = { path = "../vendor/portable-pty" }
+glib = { path = "../vendor/glib" }
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 8

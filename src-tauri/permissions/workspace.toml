@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-dispatch"
+description = "Typed workspace operations; host validates scope, trust, bounds and activity."
+commands.allow = ["dispatch"]
+
+[[permission]]
+identifier = "allow-subscribe"
+description = "Project scoped bounded native streams."
+commands.allow = ["subscribe"]

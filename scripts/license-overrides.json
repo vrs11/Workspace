@@ -1,0 +1,8 @@
+{
+  "css-value@0.0.1": {
+    "license": "MIT",
+    "source": "Readme.md",
+    "sha256": "8899717e6304c84d9d45ecc565ef462cb850c47076632f77e16761a3b39560b8",
+    "evidence": "The exact installed package Readme.md contains the complete MIT grant and copyright; package.json omits its license field."
+  }
+}

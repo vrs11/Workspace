@@ -1,0 +1,1 @@
+{"identifier":"main","description":"Bundled main workspace only. No remote origins or generic shell/filesystem plugin.","windows":["main"],"permissions":["core:default","allow-dispatch","allow-subscribe"]}

@@ -1,0 +1,1844 @@
+:root {
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-size: 12px;
+  color-scheme: dark;
+  --bg: #171c20;
+  --surface: #1d2328;
+  --raised: #252d33;
+  --border: #343e45;
+  --text: #dce3e7;
+  --muted: #95a4ae;
+  --accent: #91d6bc;
+  --selected: #2c423c;
+  --warning: #d7bb76;
+  --editor: #1e1e1e;
+  --git-modified: #80b6ff;
+  --git-added: #94c783;
+  --git-untracked: #d8a679;
+  --git-staged: #83c9bb;
+  --git-renamed: #bdadff;
+  --git-deleted: #f28b82;
+  --git-conflict: #ff8b88;
+  --git-ignored: #8b959b;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f7f8;
+  --surface: #fff;
+  --raised: #e9eef1;
+  --border: #cbd4d9;
+  --text: #26343e;
+  --muted: #586c78;
+  --accent: #21624e;
+  --selected: #deeee8;
+  --warning: #795c12;
+  --editor: #fff;
+  --git-modified: #215ea8;
+  --git-added: #356a24;
+  --git-untracked: #815526;
+  --git-staged: #216b5d;
+  --git-renamed: #7044a4;
+  --git-deleted: #af3127;
+  --git-conflict: #af3127;
+  --git-ignored: #68747d;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  padding: 5px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+button:hover {
+  background: var(--raised);
+  border-color: var(--border);
+}
+button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.dialog-content button:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+input,
+textarea,
+select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  min-width: 0;
+}
+textarea {
+  resize: vertical;
+}
+input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+a {
+  color: var(--accent);
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+}
+code,
+kbd {
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+kbd {
+  font-size: 10px;
+  opacity: 0.55;
+}
+.primary {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+.primary:hover {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+.muted,
+small {
+  color: var(--muted);
+}
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 47px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.brand {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  font-weight: 600;
+  margin-right: 10px;
+}
+.brand small {
+  font-weight: 400;
+  font-size: 10px;
+}
+.brand-mark {
+  display: block;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+.header-spacer {
+  flex: 1;
+}
+.app-header select {
+  max-width: 260px;
+  font-size: 11px;
+}
+.notice,
+.trust-banner,
+.editor-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--selected);
+  white-space: pre-wrap;
+  max-height: 140px;
+  overflow: auto;
+}
+.notice {
+  color: var(--warning);
+  background: var(--surface);
+}
+.trust-banner,
+.editor-warning {
+  color: var(--warning);
+}
+.welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.welcome h1 {
+  font-size: 25px;
+  font-weight: 500;
+  margin: 10px;
+}
+.welcome p {
+  color: var(--muted);
+}
+.welcome-icon {
+  color: var(--accent);
+}
+.recent-projects {
+  display: flex;
+  flex-direction: column;
+  margin: 20px;
+  min-width: 420px;
+  max-width: 650px;
+}
+.recent-projects button {
+  justify-content: space-between;
+  gap: 35px;
+}
+.recent-projects span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 400px;
+}
+.workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.dock-workspace {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.dock-pane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background: var(--surface);
+  overflow: hidden;
+}
+.dock-header {
+  display: flex;
+  align-items: center;
+  height: 29px;
+  min-height: 29px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  user-select: none;
+  padding: 0 3px;
+}
+.dock-header button {
+  padding: 4px;
+}
+.dock-grip {
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-drag: none;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.dock-grip:active {
+  cursor: grabbing;
+}
+.dock-workspace[data-panel-dragging] *,
+.dock-workspace[data-panel-dragging] *:hover {
+  cursor: grabbing;
+  user-select: none;
+}
+.dock-grip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dock-slot,
+.dock-pane-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.dock-pane-body {
+  display: flex;
+  flex-direction: column;
+}
+.dock-menu {
+  min-width: 180px;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 8px 24px #0005;
+  z-index: 150;
+}
+.dock-menu [role="menuitem"],
+.dock-menu [role="menuitemcheckbox"],
+.dock-menu [role="menuitemradio"] {
+  padding: 6px 10px;
+  outline: none;
+  cursor: default;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  justify-content: space-between;
+  border-radius: 3px;
+}
+.dock-menu [data-highlighted] {
+  background: var(--selected);
+}
+.dock-menu [data-disabled] {
+  opacity: 0.4;
+}
+.dock-menu [role="separator"] {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+.dock-menu [data-radix-dropdown-menu-content] {
+  font-size: 12px;
+}
+.dock-menu > div:not([role]) {
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+/* Overflow menus live outside the editor. Give the whole popup an opaque
+   surface, including its padding and submenu hosts, rather than relying on
+   Monaco's inner scrollable element to paint every pixel. */
+.context-view.monaco-component.monaco-menu-container {
+  --vscode-menu-background: var(--surface);
+  --vscode-menu-foreground: var(--text);
+  --vscode-menu-border: var(--border);
+  --vscode-menu-separatorBackground: var(--border);
+  --vscode-menu-selectionBackground: var(--selected);
+  --vscode-menu-selectionForeground: var(--text);
+  --vscode-list-hoverBackground: var(--selected);
+  --vscode-list-hoverForeground: var(--text);
+  --vscode-cornerRadius-large: 5px;
+  --vscode-strokeThickness: 1px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  box-shadow: 0 8px 24px #0005;
+  animation: none;
+  z-index: 150 !important;
+}
+.monaco-menu .monaco-submenu {
+  background: var(--surface);
+  color: var(--text);
+}
+.dock-drop-grid {
+  position: absolute;
+  inset: 30px 0 0;
+  display: grid;
+  grid-template: "top top top" 24% "left . right" 52% "bottom bottom bottom" 24% / 30% 40% 30%;
+  pointer-events: none;
+  z-index: 30;
+}
+.dock-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--selected) 82%, transparent);
+  color: var(--text);
+  opacity: 0.78;
+  margin: 3px;
+  border-radius: 4px;
+  text-transform: capitalize;
+  font-size: 11px;
+}
+.dock-drop.over {
+  background: var(--accent);
+  color: var(--bg);
+  opacity: 1;
+}
+.dock-drop.top {
+  grid-area: top;
+}
+.dock-drop.right {
+  grid-area: right;
+}
+.dock-drop.bottom {
+  grid-area: bottom;
+}
+.dock-drop.left {
+  grid-area: left;
+}
+.dock-workspace-targets {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+}
+.dock-workspace-targets .dock-drop {
+  position: absolute;
+}
+.dock-workspace-targets .top {
+  top: 0;
+  left: 28%;
+  right: 28%;
+  height: 25px;
+}
+.dock-workspace-targets .bottom {
+  bottom: 0;
+  left: 28%;
+  right: 28%;
+  height: 25px;
+}
+.dock-workspace-targets .left {
+  left: 0;
+  top: 28%;
+  bottom: 28%;
+  width: 28px;
+  writing-mode: vertical-lr;
+}
+.dock-workspace-targets .right {
+  right: 0;
+  top: 28%;
+  bottom: 28%;
+  width: 28px;
+  writing-mode: vertical-lr;
+}
+.git-tool-window,
+.project-explorer {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.git-tool-window > .tool-surface {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.git-tool-window .changes-grid {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+.git-tool-window .commit-box {
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  padding: 0 8px 6px;
+  gap: 5px;
+}
+.git-tool-window .commit-box textarea {
+  min-height: 52px;
+  height: 52px;
+  max-height: 120px;
+  flex: none;
+}
+.explorer-modes {
+  display: flex;
+  min-height: 31px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.explorer-modes button {
+  border-radius: 0;
+  font-size: 11px;
+}
+.explorer-modes button.active {
+  color: var(--accent);
+  border-bottom: 2px solid var(--accent);
+}
+.explorer-mode {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.explorer-mode[hidden] {
+  display: none;
+}
+.project-explorer .search-panel {
+  min-height: 0;
+}
+.project-explorer .search-panel .toolbar {
+  align-items: stretch;
+}
+.project-explorer .search-panel .toolbar label {
+  width: 100%;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.project-explorer .search-panel .toolbar input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 0;
+  flex: 1 0 100%;
+}
+.project-explorer .search-panel .list-row {
+  white-space: normal;
+  align-items: start;
+}
+.project-explorer .search-panel .list-row > span {
+  max-width: 40%;
+}
+.dock-pane-body > .split-editor {
+  height: 100%;
+  min-height: 0;
+}
+.tree-label {
+  width: 100%;
+  height: 100%;
+}
+.tree-label[draggable="true"] {
+  cursor: grab;
+}
+.tree-label[draggable="true"]:active {
+  cursor: grabbing;
+}
+.drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--selected);
+}
+.tree-root-drop {
+  min-height: 31px;
+}
+.activity-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 43px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  padding-top: 8px;
+  gap: 9px;
+}
+.activity-bar button {
+  padding: 9px;
+  color: var(--muted);
+}
+.activity-bar button:hover {
+  color: var(--accent);
+}
+.separator {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--border);
+  transition: background 0.1s;
+}
+.media-preview {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.media-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  min-height: 29px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.media-toolbar small {
+  color: var(--muted);
+}
+.media-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.media-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+.media-fit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.media-fit img,
+.media-content video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.media-actual img {
+  max-width: none;
+  max-height: none;
+}
+.audio-preview {
+  margin: auto;
+  max-width: 100%;
+}
+.audio-preview audio {
+  width: min(500px, 100%);
+}
+.language-mode {
+  font-size: 11px;
+  height: 22px;
+  max-width: 170px;
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+}
+.keymap-preferences {
+  min-width: 0;
+}
+.keymap-preferences > p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.keymap-preferences .toolbar input {
+  min-width: 120px;
+  flex: 1;
+}
+.keymap-table > [role="row"] {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(120px, 1fr) 45px;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  min-height: 30px;
+}
+.keymap-table [role="cell"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.keymap-table kbd {
+  color: var(--muted);
+}
+.keymap-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  margin: 8px 0;
+  border: 1px solid var(--accent);
+}
+.keymap-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.keymap-error {
+  color: var(--danger, #ff9b9b);
+}
+.separator:hover,
+.separator:focus-visible,
+.separator[data-resize-active="true"] {
+  background: var(--accent);
+}
+.separator.horizontal {
+  width: 100%;
+  height: 5px;
+  cursor: row-resize;
+}
+html[data-workspace-resize] * {
+  user-select: none !important;
+}
+html[data-workspace-resize="vertical"] *,
+html[data-workspace-resize="vertical"] *:hover {
+  cursor: col-resize !important;
+}
+html[data-workspace-resize="horizontal"] *,
+html[data-workspace-resize="horizontal"] *:hover {
+  cursor: row-resize !important;
+}
+.section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.7px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  color: var(--muted);
+  height: 34px;
+  flex-shrink: 0;
+}
+.section-title button {
+  margin-left: auto;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  min-height: 34px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+.toolbar strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+.toolbar .muted {
+  max-width: 280px;
+}
+.toolbar.compact {
+  padding: 3px 6px;
+  gap: 2px;
+  min-height: 29px;
+}
+.toolbar.compact button {
+  padding: 4px;
+}
+.explorer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+.virtual-list {
+  overflow: auto;
+  flex: 1;
+  min-height: 40px;
+  outline: none;
+}
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 8px;
+  cursor: pointer;
+  font-size: 12px;
+  border-bottom: 1px solid transparent;
+  user-select: none;
+}
+.list-row:hover,
+.list-row[aria-selected="true"] {
+  background: var(--selected);
+}
+.virtual-list:focus .focused-row {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.list-row button {
+  font-size: 10px;
+  padding: 2px 5px;
+  margin-left: auto;
+}
+.explorer .list-row,
+.explorer .tree-label,
+.explorer .tree-label *,
+.explorer .tree-toggle {
+  cursor: default;
+}
+.tree-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.tree-label > span:not(.tree-indent) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-indent {
+  width: 13px;
+  display: inline-block;
+}
+.tree-label svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.editor-area {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--editor);
+}
+.tab-bar {
+  height: 35px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  display: flex;
+  border-right: 1px solid var(--border);
+  min-width: 90px;
+  max-width: 250px;
+}
+.tab.active {
+  background: var(--editor);
+  border-top: 2px solid var(--accent);
+}
+.tab > button:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+.tab > button:last-child {
+  padding: 3px 6px;
+}
+.tab button {
+  border-radius: 0;
+  font-size: 11px;
+}
+.editor-row {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.main-editor {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.split-editor {
+  flex: 1;
+  min-width: 0;
+  border-left: 3px solid var(--border);
+}
+.editor-surface {
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Plain Monaco toolbar hints cannot steal the pointer from their anchor. Keep
+   interactive/locked hovers and their links selectable. Body-level hints escape
+   dock clipping but stay below the application's modal dialogs. */
+body > .context-view:has(.workbench-hover-container) {
+  z-index: 80 !important;
+}
+.monaco-hover.workbench-hover.compact.fade-in {
+  animation: none;
+}
+body
+  > .context-view:has(.monaco-hover.workbench-hover.compact):not(
+    :has(.locked, a, button, input, [role="button"])
+  ) {
+  pointer-events: none;
+}
+.monaco-editor .find-widget > .find-part .monaco-findInput {
+  flex: 1;
+  width: 0 !important;
+  min-width: 0;
+}
+.monaco-editor .editor-widget.find-widget {
+  transition: none;
+}
+.monaco-editor .find-widget .workspace-select-matches {
+  padding: 0;
+  border: 0;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.search-error {
+  margin: 5px 8px;
+  overflow-wrap: anywhere;
+  color: var(--warning);
+}
+.diff-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.diff-content .editor-surface {
+  flex: 1;
+}
+.hunk-bar {
+  display: flex;
+  gap: 5px;
+  padding: 5px;
+  overflow: auto;
+  max-height: 60px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+}
+.hunk-bar span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.empty-state {
+  padding: 20px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.empty-state h2 {
+  font-size: 19px;
+  font-weight: 500;
+  color: var(--text);
+  margin: 7px 0;
+}
+.bottom-tools {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--surface);
+}
+.tool-tabs {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.tool-tabs button {
+  border-radius: 0;
+  font-size: 11px;
+  height: 100%;
+  padding: 5px 12px;
+}
+.tool-tabs button.active {
+  color: var(--accent);
+  border-bottom: 2px solid var(--accent);
+}
+.tool-tabs button:last-child {
+  margin-left: auto;
+}
+.tool-content {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: auto;
+}
+.tool-surface {
+  height: 100%;
+  width: 100%;
+}
+.tool-surface[hidden] {
+  display: none;
+}
+.git-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.git-panel > .toolbar button {
+  font-size: 11px;
+}
+.changes-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr minmax(180px, 0.75fr);
+  min-height: 90px;
+  flex: 1;
+}
+.change-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+}
+.change-code {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--warning);
+  min-width: 14px;
+}
+.commit-box {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.commit-box label {
+  font-size: 11px;
+}
+.commit-box textarea {
+  min-height: 52px;
+  flex: 1;
+  resize: none;
+}
+.commit-box small {
+  font-size: 10px;
+}
+.history-area {
+  display: flex;
+  flex-direction: column;
+  min-height: 110px;
+  flex: 1;
+}
+.history-area .list-row {
+  overflow: hidden;
+}
+.git-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  line-height: 20px;
+}
+.git-history-subject {
+  flex: 1;
+}
+.git-history-refs {
+  flex: 0 1 auto;
+  max-width: 32%;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.git-history-row code {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--accent);
+}
+.git-output {
+  padding: 5px 10px;
+  max-height: 170px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.git-output pre {
+  margin: 5px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.git-output p {
+  overflow-wrap: anywhere;
+}
+.search-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 150px;
+}
+.search-panel .toolbar {
+  flex-wrap: wrap;
+}
+.search-panel .toolbar input:not([type="checkbox"]) {
+  min-width: 160px;
+}
+.search-panel .list-row > span {
+  max-width: 45%;
+  flex-shrink: 0;
+}
+.search-panel .list-row code {
+  font-size: 11px;
+}
+.output-panel {
+  padding: 15px;
+  white-space: pre-wrap;
+}
+.status-bar {
+  height: 25px;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 0 12px;
+  font-size: 10px;
+  flex-shrink: 0;
+  background: var(--selected);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+}
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: #0008;
+  z-index: 100;
+}
+.dialog-content {
+  position: fixed;
+  z-index: 101;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 18px 70px #0007;
+  border-radius: 8px;
+  width: min(520px, 90vw);
+  max-height: 85vh;
+  padding: 24px;
+  overflow: auto;
+}
+.dialog-content h2 {
+  font-size: 17px;
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+.dialog-content p {
+  white-space: pre-wrap;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.dialog-content form > label {
+  flex-direction: column;
+  align-items: stretch;
+}
+.dialog-content input {
+  width: 100%;
+}
+.dialog-content input[type="checkbox"] {
+  width: auto;
+}
+.dialog-content .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+.dialog-content.wide {
+  width: min(800px, 90vw);
+}
+.dialog-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+}
+.dialog-content.palette {
+  top: 18%;
+  transform: translateX(-50%);
+  width: min(760px, 90vw);
+  min-height: 220px;
+}
+.palette .search-panel {
+  height: 360px;
+}
+.palette .quick-files {
+  height: auto;
+  min-height: 0;
+}
+.quick-files .toolbar > label:first-child {
+  flex: 1;
+}
+.quick-files .toolbar .check {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+.quick-files .list-row > span {
+  flex: 1;
+  max-width: 100%;
+}
+.command-option {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  padding: 10px;
+}
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settings-panel h2 {
+  font-size: 14px;
+}
+.tool-setting {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--border);
+}
+.tool-setting strong {
+  grid-column: 1 / -1;
+}
+.tool-setting code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.tool-setting small {
+  grid-column: 1 / -1;
+}
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #121619;
+  color: #dce2e4;
+}
+.terminal-view {
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.terminal-surface {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 6px;
+  overflow: hidden;
+}
+.check {
+  font-size: 11px;
+}
+@media (max-width: 1050px) {
+  .brand small {
+    display: none;
+  }
+  .app-header select {
+    max-width: 160px;
+  }
+  .changes-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .commit-box {
+    grid-column: 1/-1;
+    flex-direction: row;
+    align-items: center;
+  }
+  .commit-box textarea {
+    min-height: 35px;
+    height: 35px;
+  }
+  .commit-box small {
+    display: none;
+  }
+  .app-header kbd {
+    display: none;
+  }
+  .status-bar {
+    gap: 12px;
+  }
+}
+
+.conflict-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.conflict-comparison {
+  flex: 1;
+  min-height: 100px;
+}
+.conflict-result {
+  flex: 1;
+  min-height: 100px;
+  border-top: 1px solid var(--border);
+}
+.terminal-tab-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+.terminal-tab-body[hidden] {
+  display: none;
+}
+.terminal-tab-body > .terminal-view {
+  height: 100%;
+}
+.terminal-view {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid transparent;
+}
+.terminal-view.active-pane {
+  border-color: var(--border);
+}
+.terminal-emulator {
+  width: 100%;
+  height: 100%;
+  /* The viewport already clips to this size. Keep output layout and paint
+     inside it instead of invalidating the surrounding dock flex tree. */
+  contain: size layout paint;
+}
+.terminal-panel .toolbar {
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.terminal-state {
+  white-space: nowrap;
+}
+.terminal-maximized .terminal-view.active-pane {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background: var(--bg);
+}
+.terminal-maximized .minimized-pane {
+  visibility: hidden;
+}
+[data-theme="light"] .terminal-panel {
+  background: #f7f8fa;
+  color: #24292f;
+}
+.replace-panel {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  max-height: 45%;
+  overflow: auto;
+}
+.replace-preview {
+  padding: 4px 8px;
+}
+.settings-panel fieldset {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+}
+.settings-panel fieldset label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.settings-panel fieldset textarea {
+  min-height: 48px;
+  flex: 1;
+}
+.main-editor {
+  height: 100%;
+}
+.split-editor {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.revision-files {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding: 6px;
+  max-height: 100px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+}
+.revision-files strong {
+  flex-basis: 100%;
+  font-size: 11px;
+}
+
+/* Terminal controls share the dock title row; the PTY owns the entire body. */
+.dock-header-slot,
+.dock-header-content {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+.dock-header > button {
+  flex-shrink: 0;
+}
+.terminal-header {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  gap: 1px;
+}
+.terminal-tabs {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.terminal-tabs::-webkit-scrollbar {
+  display: none;
+}
+.terminal-tabs [role="tab"] {
+  flex-shrink: 0;
+  min-width: 42px;
+  max-width: 160px;
+  padding: 0 9px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.terminal-tabs [aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.terminal-icon,
+.dock-header .terminal-icon {
+  width: 25px;
+  height: 25px;
+  flex-shrink: 0;
+  padding: 3px;
+  color: var(--muted);
+}
+.terminal-icon:hover {
+  color: var(--text);
+}
+.terminal-view {
+  position: relative;
+}
+.terminal-find {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: min(370px, calc(100% - 20px));
+  padding: 3px 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 3px 10px #0004;
+}
+.terminal-find > input {
+  flex: 1;
+  min-width: 25px;
+  width: 100%;
+  padding: 3px 5px;
+  border: 0;
+  background: transparent;
+}
+.terminal-match {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.terminal-exit {
+  position: absolute;
+  bottom: 6px;
+  left: 8px;
+  max-width: calc(100% - 16px);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 4px 0 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  z-index: 5;
+  font-size: 11px;
+}
+.terminal-exit .terminal-state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.terminal-menu [role="menuitem"] {
+  justify-content: flex-start;
+}
+
+.git-view-tabs {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  min-width: 0;
+}
+.git-view-tabs button {
+  border-radius: 0;
+  height: 100%;
+  padding: 0 8px;
+  font-size: 11px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+}
+.git-view-tabs [aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.git-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 31px;
+  min-height: 31px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 0 5px;
+}
+.git-branch {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  padding: 3px 4px;
+  font-size: 11px;
+}
+.git-branch svg {
+  flex-shrink: 0;
+}
+.git-icon {
+  width: 25px;
+  height: 25px;
+  flex-shrink: 0;
+  padding: 3px;
+  color: var(--muted);
+}
+.git-icon:hover {
+  color: var(--text);
+}
+.git-menu [role="menuitem"] {
+  justify-content: flex-start;
+}
+.git-change-group,
+.git-change-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+.git-change-group {
+  font-size: 11px;
+  font-weight: 600;
+}
+.git-change-group > button {
+  margin-left: auto;
+}
+.git-change-row {
+  padding-left: 16px;
+}
+.git-change-row .truncate {
+  flex: 1;
+}
+.git-change-row .change-code {
+  flex-shrink: 0;
+}
+.git-clean {
+  flex: 1;
+  min-height: 0;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.commit-toggle {
+  height: 28px;
+  width: 100%;
+  justify-content: flex-start;
+  padding: 3px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.git-details dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px 15px;
+  font-size: 12px;
+}
+.git-details dt {
+  color: var(--muted);
+}
+.git-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.git-output {
+  flex-shrink: 0;
+  max-height: 30%;
+  overflow: auto;
+}
+.terminal-tab {
+  display: flex;
+  flex-shrink: 0;
+  min-width: 0;
+  max-width: 180px;
+  border-bottom: 2px solid transparent;
+}
+.terminal-tab.active {
+  border-bottom-color: var(--accent);
+}
+.terminal-tab [role="tab"] {
+  border-bottom: 0;
+  min-width: 0;
+  max-width: 153px;
+  padding-right: 4px;
+}
+.terminal-tab-close,
+.dock-header .terminal-tab-close {
+  width: 21px;
+  padding: 2px;
+  border-radius: 0;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.terminal-tab-close:hover {
+  color: var(--text);
+}
+.terminal-split-close {
+  position: absolute;
+  top: 4px;
+  right: 7px;
+  z-index: 4;
+  background: var(--surface);
+  opacity: 0;
+  pointer-events: none;
+}
+.terminal-view:hover > .terminal-split-close,
+.terminal-view:focus-within > .terminal-split-close,
+.terminal-split-close:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.git-tool-window .changes-grid > .virtual-list {
+  min-height: 0;
+}
+.git-tool-window .commit-box {
+  max-height: 60%;
+  overflow: auto;
+}
+
+.explorer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 31px;
+  min-height: 31px;
+  padding: 0 5px;
+  border-bottom: 1px solid var(--border);
+}
+.explorer-toolbar > button,
+.explorer-toolbar > [data-state] {
+  font-size: 11px;
+  padding: 3px 5px;
+}
+.explorer-refresh {
+  width: 25px;
+  height: 25px;
+  padding: 3px;
+  color: var(--muted);
+}
+.explorer-menu [role="menuitem"] {
+  justify-content: flex-start;
+}
+.explorer-context-anchor,
+.tab-context-anchor {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.list-row .tree-toggle {
+  padding: 0;
+  width: 16px;
+  height: 20px;
+  margin: 0;
+  flex-shrink: 0;
+  border: 0;
+}
+.tree-label > svg {
+  flex-shrink: 0;
+}
+.tree-label[data-git-status] {
+  color: var(--tree-git-color, var(--text));
+}
+.tree-label[data-git-status="modified"] {
+  --tree-git-color: var(--git-modified);
+}
+.tree-label[data-git-status="added"] {
+  --tree-git-color: var(--git-added);
+}
+.tree-label[data-git-status="untracked"] {
+  --tree-git-color: var(--git-untracked);
+}
+.tree-label[data-git-status="staged"] {
+  --tree-git-color: var(--git-staged);
+}
+.tree-label[data-git-status="renamed"] {
+  --tree-git-color: var(--git-renamed);
+}
+.tree-label[data-git-status="deleted"] {
+  --tree-git-color: var(--git-deleted);
+}
+.tree-label[data-git-status="conflict"] {
+  --tree-git-color: var(--git-conflict);
+  font-weight: 600;
+}
+.tree-label[data-git-status="ignored"] {
+  --tree-git-color: var(--git-ignored);
+}
+.tree-label[data-git-status] > svg {
+  color: inherit;
+}
+.tree-git-status {
+  margin-left: auto;
+  padding-right: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.question-error {
+  margin-top: 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--warning);
+}
+.question-error > span {
+  flex: 1;
+  white-space: pre-wrap;
+}
+.error-details-trigger {
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.error-details dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px 14px;
+}
+.error-details dt {
+  color: var(--muted);
+}
+.error-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+  font-family: monospace;
+  font-size: 11px;
+}
+.notice > span {
+  flex: 1;
+}
+
+.dock-header .explorer-modes {
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+}
+.dock-header .explorer-modes button {
+  height: 100%;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.settings-tabs [aria-selected="true"] {
+  color: var(--accent);
+  border-bottom: 2px solid var(--accent);
+}
+
+.media-content.media-image {padding:0;overflow:hidden;position:relative;}
+.image-viewport {position:relative;width:100%;height:100%;overflow:hidden;touch-action:none;user-select:none;}
+.image-viewport img {position:absolute;max-width:none;max-height:none;object-fit:initial;cursor:grab;user-select:none;-webkit-user-drag:none;}
+.image-viewport.panning, .image-viewport.panning img {cursor:grabbing;}
+
+/* Dock geometry comes from the split allocation. Repeated percentage heights
+   through flex descendants make WebKit remeasure the whole pane chain on input.
+   Keep Monaco's viewport widget coordinates and each feature's own scrollbars. */
+.dock-slot,
+.dock-pane-body {
+  height: auto;
+  display: flex;
+  flex-direction: column;
+}
+.dock-pane-body > * {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.main-editor,
+.split-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.editor-surface {
+  height: auto;
+  flex: 1;
+  min-width: 0;
+}

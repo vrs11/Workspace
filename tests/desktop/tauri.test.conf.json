@@ -1,0 +1,30 @@
+{
+  "productName": "Workspace Test",
+  "identifier": "org.agentworkspace.desktop-test",
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": [
+        "main",
+        {
+          "identifier": "desktop-test-driver",
+          "windows": [
+            "main"
+          ],
+          "permissions": [
+            "wdio:default",
+            "core:window:allow-set-focus",
+            "core:webview:allow-set-webview-focus",
+            "core:window:allow-show",
+            "core:webview:allow-webview-show",
+            "core:window:allow-set-position"
+          ]
+        }
+      ]
+    }
+  },
+  "build": {
+    "beforeBuildCommand": "pnpm build:desktop-web",
+    "frontendDist": "../dist-desktop-test"
+  }
+}
