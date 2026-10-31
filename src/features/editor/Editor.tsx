@@ -1,9 +1,13 @@
-import { memo } from "react";
+import { memo, lazy, Suspense, useState } from "react";
 import { useEffect, useRef } from "react";
 import { useApp } from "../../shared/state/store";
 import { models } from "./models";
 import { leaseEditorView } from "./viewPool";
 import { rememberEditorFile } from "../../shared/fileTargets";
+import { editorViewOptions, installGutterMenu } from "./viewOptions";
+import { GutterContextMenu } from "./EditorViewMenu";
+import { useDocumentViews } from "./documentViewState";
+const BlameGutter = lazy(() => import("./BlameGutter"));
 const views = new Map<
   string,
   import("monaco-editor").editor.ICodeEditorViewState
@@ -11,9 +15,11 @@ const views = new Map<
 function Editor({
   entry,
   group = "primary",
+  visible = true,
 }: {
   entry: string;
   group?: string;
+  visible?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const instance = useRef<
@@ -22,6 +28,16 @@ function Editor({
   const theme = useApp((s) => s.settings?.theme);
   const font = useApp((s) => s.settings?.fontSize);
   const readonly = useApp((s) => s.docs[entry]?.readonly);
+  const softWrap = useApp((s) => s.settings?.editorSoftWrap);
+  const lineNumbers = useApp((s) => s.settings?.editorLineNumbers);
+  const annotate = useDocumentViews((s) => !!s.blame[entry]);
+  const [ready, setReady] = useState<{
+    entry: string;
+    editor: import("monaco-editor").editor.IStandaloneCodeEditor;
+  } | null>(null);
+  const [context, setContext] = useState<{ x: number; y: number } | null>(null);
+  const shown = useRef(visible);
+  shown.current = visible;
   useEffect(() => {
     let disposed = false;
     let cleanup: (() => void) | undefined;
@@ -43,7 +59,7 @@ function Editor({
           minimap: { enabled: false },
           readOnly: !!current.docs[entry]?.readonly,
           scrollBeyondLastLine: false,
-          wordWrap: "off",
+          ...editorViewOptions(),
           accessibilitySupport: "auto",
           largeFileOptimizations: true,
           fixedOverflowWidgets: true,
@@ -55,6 +71,9 @@ function Editor({
       );
       const editor = lease.editor;
       instance.current = editor;
+      const binding = { entry, editor };
+      setReady(binding);
+      const stopGutter = installGutterMenu(editor, monaco, setContext);
       monaco.editor.setTheme(
         current.settings?.theme === "light" ? "vs" : "vs-dark",
       );
@@ -71,7 +90,8 @@ function Editor({
         useApp.getState().set({ navigate: null });
       }
       const focus = (event: Event) => {
-        if ((event as CustomEvent<string>).detail === group) editor.focus();
+        if (shown.current && (event as CustomEvent<string>).detail === group)
+          editor.focus();
       };
       let reloaded: import("monaco-editor").editor.ICodeEditorViewState | null =
         null;
@@ -88,6 +108,7 @@ function Editor({
       window.addEventListener("editor-focus", focus);
       // Lazy creation can finish after the user has opened another control.
       if (
+        shown.current &&
         !document.querySelector('.dialog-content[role="dialog"], [role="menu"]')
       )
         editor.focus();
@@ -98,6 +119,9 @@ function Editor({
       editor.render(true);
       cleanup = () => {
         if (instance.current === editor) instance.current = null;
+        setReady((current) => (current === binding ? null : current));
+        setContext(null);
+        stopGutter();
         const view = editor.saveViewState();
         if (view) {
           if (views.size > 200) views.clear();
@@ -117,19 +141,38 @@ function Editor({
   useEffect(() => {
     const editor = instance.current;
     if (editor) {
-      editor.updateOptions({ fontSize: font, readOnly: !!readonly });
+      editor.updateOptions({
+        fontSize: font,
+        readOnly: !!readonly,
+        ...editorViewOptions(),
+      });
       void import("./monaco").then(({ monaco }) =>
         monaco.editor.setTheme(theme === "light" ? "vs" : "vs-dark"),
       );
     }
-  }, [font, readonly, theme]);
+  }, [font, readonly, theme, softWrap, lineNumbers]);
   return (
     <div
-      ref={ref}
-      className="editor-surface"
+      className="code-editor-body"
       onFocusCapture={() => rememberEditorFile(entry)}
-      aria-label={`Editor ${useApp.getState().docs[entry]?.name ?? ""}`}
-    />
+    >
+      {annotate && visible && ready?.entry === entry && (
+        <Suspense fallback={null}>
+          <BlameGutter entry={entry} editor={ready.editor} />
+        </Suspense>
+      )}
+      <div
+        ref={ref}
+        className="editor-surface"
+        aria-label={`Editor ${useApp.getState().docs[entry]?.name ?? ""}`}
+      />
+      <GutterContextMenu
+        entry={entry}
+        point={context}
+        onClose={() => setContext(null)}
+        onFocus={() => instance.current?.focus()}
+      />
+    </div>
   );
 }
 

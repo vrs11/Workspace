@@ -1,7 +1,9 @@
+pub mod blame;
 pub mod credentials;
 pub mod dock;
 #[cfg(unix)]
 mod document_metadata;
+pub mod document_preview;
 pub mod documents;
 pub mod dto;
 pub mod error;
@@ -125,6 +127,7 @@ pub struct AppState {
     pub close_requested: AtomicBool,
     pub decoration_worker: tokio::sync::Mutex<()>,
     pub decoration_generation: AtomicU64,
+    pub blame_workers: tokio::sync::Semaphore,
     pub(crate) preferences: Arc<preferences::Preferences>,
     pub(crate) files: file_transfer::FileTransfers,
     pub(crate) launches: launch::LaunchRequests,
@@ -156,6 +159,36 @@ fn read_decorations(host: &Arc<Mutex<Host>>, scope: &str, entries: &[String]) ->
             .unwrap_or(Path::new(&job.project.root))
     {
         return Err(AppError::new("scope", "Selected repository changed"));
+    }
+    Ok(response)
+}
+fn read_blame(host: &Arc<Mutex<Host>>, scope: &str, entry: &str, text: String) -> Result<Response> {
+    let job = {
+        let mut host = host
+            .lock()
+            .map_err(|_| AppError::new("internal", "Host unavailable"))?;
+        let exe = host.tool("git")?;
+        host.project(scope, true, false)?
+            .blame_read(&exe, entry, text)?
+    };
+    let response = job.read()?;
+    let mut host = host
+        .lock()
+        .map_err(|_| AppError::new("internal", "Host unavailable"))?;
+    let workspace = host.project(scope, true, false)?;
+    if workspace.entry(entry)? != job.path || !workspace.documents.contains_key(entry) {
+        return Err(AppError::new("scope", "Blame's document changed or closed"));
+    }
+    let (parent, _) = security::parent(&workspace.dir, &job.path)?;
+    if security::identity_of_dir(
+        &Path::new(&workspace.project.root).join(job.path.parent().unwrap_or(Path::new(""))),
+        &parent,
+    )? != job.parent_identity
+    {
+        return Err(AppError::new(
+            "scope",
+            "Blame's parent folder changed; reopen the file",
+        ));
     }
     Ok(response)
 }
@@ -428,6 +461,7 @@ impl Host {
         let write = matches!(
             &request,
             Request::Settings { .. }
+                | Request::EditorOptions { .. }
                 | Request::Trust { .. }
                 | Request::OpenProject { .. }
                 | Request::RelocateProject { .. }
@@ -623,6 +657,19 @@ impl Host {
                 *context = (Some(project.clone()), self.settings.clone());
                 Ok(Response::Project { project })
             }
+            Request::EditorOptions {
+                soft_wrap,
+                line_numbers,
+            } => {
+                let mut settings = self.settings.clone();
+                if let Some(value) = soft_wrap {
+                    settings.editor_soft_wrap = value;
+                }
+                if let Some(value) = line_numbers {
+                    settings.editor_line_numbers = value;
+                }
+                self.handle_inner(Request::Settings { settings }, bus, cancel)
+            }
             Request::Settings { mut settings } => {
                 if !workspace::validate_keybindings(&settings)
                     || settings.version != 2
@@ -756,7 +803,7 @@ impl Host {
                             "Close a media tab before opening another preview (64 open previews).",
                         ));
                     }
-                    store.retain(|_, (_, value)| value.info.entry != entry);
+                    store.retain(|_, (_, value)| value.embedded || value.info.entry != entry);
                     store.insert(media.token.clone(), (scope, preview));
                     return Ok(Response::Media { media });
                 }
@@ -773,6 +820,44 @@ impl Host {
                     .map_err(|_| AppError::new("internal", "Preview unavailable"))?
                     .remove(&token);
                 Ok(Response::Ok)
+            }
+            Request::PreviewLink {
+                scope,
+                document,
+                href,
+            } => {
+                let entry = self
+                    .project(&scope, false, false)?
+                    .preview_link(&document, &href)?;
+                Ok(Response::Entries {
+                    entries: vec![entry],
+                    truncated: false,
+                })
+            }
+            Request::PreviewImage {
+                scope,
+                document,
+                href,
+            } => {
+                let media = self
+                    .project(&scope, false, false)?
+                    .preview_image(&document, &href)?;
+                let preview =
+                    self.workspace.as_ref().expect("validated").media[&media.token].clone();
+                let mut store = self
+                    .media_store
+                    .lock()
+                    .map_err(|_| AppError::new("internal", "Preview unavailable"))?;
+                if store.len() >= 64 {
+                    self.workspace
+                        .as_mut()
+                        .expect("validated")
+                        .media
+                        .remove(&media.token);
+                    return Err(AppError::limit());
+                }
+                store.insert(media.token.clone(), (scope, preview));
+                Ok(Response::Media { media })
             }
             Request::OpenDocument { scope, entry } => {
                 self.project(&scope, false, false)?
@@ -947,6 +1032,12 @@ impl Host {
                 let exe = self.tool("git")?;
                 self.project(&scope, true, false)?
                     .git_decorations(&exe, &entries)
+            }
+            Request::GitBlame { scope, entry, text } => {
+                let exe = self.tool("git")?;
+                self.project(&scope, true, false)?
+                    .blame_read(&exe, &entry, text)?
+                    .read()
             }
             Request::GitDiff {
                 scope,
@@ -1634,6 +1725,18 @@ async fn dispatch(window: tauri::WebviewWindow, request: Request) -> Result<Resp
             }
             Ok(response)
         }
+        Request::GitBlame { scope, entry, text } => {
+            let _permit = state.blame_workers.try_acquire().map_err(|_| {
+                AppError::new(
+                    "workspaceBusy",
+                    "Other blame annotations are loading; try again shortly",
+                )
+            })?;
+            let host = state.host.clone();
+            tauri::async_runtime::spawn_blocking(move || read_blame(&host, &scope, &entry, text))
+                .await
+                .map_err(|_| AppError::new("internal", "Git blame worker failed"))?
+        }
         Request::TakeOpenRequest => Ok(Response::Text {
             text: state.launches.take().unwrap_or_default(),
         }),
@@ -1977,6 +2080,7 @@ async fn dispatch(window: tauri::WebviewWindow, request: Request) -> Result<Resp
             let changed_preferences = matches!(
                 &request,
                 Request::Settings { .. }
+                    | Request::EditorOptions { .. }
                     | Request::Trust { .. }
                     | Request::OpenProject { .. }
                     | Request::RelocateProject { .. }
@@ -2131,6 +2235,113 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn editor_view_options_patch_preferences_without_replacing_other_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut host = Host::new(temp.path().join("data")).unwrap();
+        host.settings.font_size = 19;
+        host.settings
+            .keybindings
+            .insert("app.save".into(), vec!["Ctrl+S".into()]);
+        let bus = EventBus::new();
+        let cancel = Arc::new(AtomicU32::new(0));
+        host.handle(
+            Request::EditorOptions {
+                soft_wrap: Some(true),
+                line_numbers: None,
+            },
+            bus.clone(),
+            cancel.clone(),
+        )
+        .unwrap();
+        host.handle(
+            Request::EditorOptions {
+                soft_wrap: None,
+                line_numbers: Some(false),
+            },
+            bus,
+            cancel,
+        )
+        .unwrap();
+        let settings = workspace::load_settings(&host.storage).unwrap();
+        assert!(settings.editor_soft_wrap);
+        assert!(!settings.editor_line_numbers);
+        assert_eq!(settings.font_size, 19);
+        assert_eq!(settings.keybindings["app.save"], vec!["Ctrl+S"]);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn delayed_blame_does_not_hold_the_host_lock_and_rechecks_trust() {
+        use std::{
+            os::unix::fs::PermissionsExt,
+            time::{Duration, Instant},
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let exe = ["/usr/bin/git", "/usr/local/bin/git"]
+            .into_iter()
+            .find(|path| Path::new(path).is_file())
+            .unwrap();
+        let checked = |args: &[&str]| {
+            git::checked(
+                Path::new(exe),
+                &root,
+                &args.iter().map(Into::into).collect::<Vec<_>>(),
+                None,
+            )
+            .unwrap()
+        };
+        checked(&["init"]);
+        checked(&["config", "user.name", "Fixture"]);
+        checked(&["config", "user.email", "fixture@example.invalid"]);
+        checked(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(root.join("file"), "line\n").unwrap();
+        checked(&["add", "file"]);
+        checked(&["commit", "-m", "base"]);
+        let marker = temp.path().join("started");
+        let release = temp.path().join("release");
+        let wrapper = temp.path().join("git-wrapper");
+        let quote =
+            |path: &Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
+        std::fs::write(&wrapper, format!("#!/bin/sh\nfor arg in \"$@\"; do\n if [ \"$arg\" = blame ]; then\n  : > {}\n  while [ ! -e {} ]; do /bin/sleep 0.01; done\n fi\ndone\nexec {} \"$@\"\n", quote(&marker), quote(&release), quote(Path::new(exe)))).unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut host = Host::new(temp.path().join("data")).unwrap();
+        let mut workspace = Workspace::open(&root, &[]).unwrap();
+        workspace.project.trusted = true;
+        let scope = workspace.project.id.clone();
+        let entry = workspace.register("file".into());
+        workspace.document_open(&entry, &host.storage).unwrap();
+        host.workspace = Some(workspace);
+        host.settings.git = Some(wrapper.to_str().unwrap().into());
+        let host = Arc::new(Mutex::new(host));
+        let worker_host = host.clone();
+        struct Release(PathBuf);
+        impl Drop for Release {
+            fn drop(&mut self) {
+                let _ = std::fs::write(&self.0, "release");
+            }
+        }
+        let cleanup = Release(release.clone());
+        let worker =
+            std::thread::spawn(move || read_blame(&worker_host, &scope, &entry, "line\n".into()));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !marker.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(marker.exists(), "Git must reach the blocked blame command");
+        {
+            let mut host = host.try_lock().expect("Blame must release the host mutex");
+            let workspace = host.workspace.as_mut().unwrap();
+            assert!(matches!(
+                workspace.list(None).unwrap(),
+                Response::Entries { .. }
+            ));
+            workspace.project.trusted = false;
+        }
+        drop(cleanup);
+        assert_eq!(worker.join().unwrap().unwrap_err().code, "untrusted");
+    }
     #[cfg(unix)]
     #[test]
     fn delayed_git_colors_leave_file_listing_unlocked_and_recheck_trust() {

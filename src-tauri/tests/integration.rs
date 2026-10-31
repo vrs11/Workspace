@@ -758,6 +758,8 @@ fn legacy_settings_migrate_without_ai_fields_or_loss_of_unrelated_preferences() 
     assert!(settings.auto_save_idle);
     assert!(settings.auto_save_on_focus_loss);
     assert_eq!(settings.auto_save_delay, 15);
+    assert!(!settings.editor_soft_wrap);
+    assert!(settings.editor_line_numbers);
     let raw = std::fs::read_to_string(t.path().join("settings.json")).unwrap();
     assert!(!raw.contains("codex"));
     assert!(t.path().join("settings.bak").exists());
@@ -3545,4 +3547,180 @@ fn paste_keeps_successful_items_and_reports_a_later_failure_without_replay() {
     assert!(!f.root.join("second").exists());
     assert_eq!(std::fs::read(first).unwrap(), b"first");
     assert_eq!(std::fs::read(second).unwrap(), b"second");
+}
+
+#[test]
+fn blame_uses_current_buffer_and_preserves_disk_and_index() {
+    let mut f = Fixture::new();
+    let name = "- literal [file] 🌍.txt";
+    f.write(name, "first\nsecond\nthird\n");
+    f.commit();
+    let initial = run(&f.git, &f.root, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    run(&f.git, &f.root, &["config", "user.name", "Another Author"]);
+    f.write(name, "first\nchanged\nthird\n");
+    f.commit();
+    let second = run(&f.git, &f.root, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    let index_before = run(&f.git, &f.root, &["write-tree"]);
+    let id = f.w.register(name.into());
+    f.w.document_open(&id, &f.storage).unwrap();
+    let Response::GitBlame { blame } =
+        f.w.blame_read(&f.git, &id, "first\nchanged\nunsaved\n".into())
+            .unwrap()
+            .read()
+            .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(blame.lines.len(), 3);
+    assert_eq!(blame.commits[blame.lines[0].commit as usize].id, initial);
+    assert_eq!(blame.commits[blame.lines[1].commit as usize].id, second);
+    assert_eq!(
+        blame.commits[blame.lines[1].commit as usize].author,
+        "Another Author"
+    );
+    assert!(
+        blame.commits[blame.lines[2].commit as usize]
+            .id
+            .bytes()
+            .all(|byte| byte == b'0')
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.join(name)).unwrap(),
+        "first\nchanged\nthird\n"
+    );
+    assert_eq!(run(&f.git, &f.root, &["write-tree"]), index_before);
+}
+
+#[test]
+fn blame_follows_renames_and_rejects_untracked_unopened_and_oversized_buffers() {
+    let mut f = Fixture::new();
+    f.write("original", "tracked\n");
+    f.commit();
+    let commit = run(&f.git, &f.root, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    run(&f.git, &f.root, &["mv", "original", "renamed"]);
+    f.commit();
+    let id = f.w.register("renamed".into());
+    assert!(f.w.blame_read(&f.git, &id, "tracked\n".into()).is_err());
+    f.w.document_open(&id, &f.storage).unwrap();
+    let Response::GitBlame { blame } =
+        f.w.blame_read(&f.git, &id, "tracked\n".into())
+            .unwrap()
+            .read()
+            .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(blame.commits[0].id, commit);
+    assert!(
+        f.w.blame_read(&f.git, &id, "x".repeat(2 * 1024 * 1024 + 1))
+            .is_err()
+    );
+    f.write("new", "untracked\n");
+    let id = f.w.register("new".into());
+    f.w.document_open(&id, &f.storage).unwrap();
+    assert_eq!(
+        f.w.blame_read(&f.git, &id, "untracked\n".into())
+            .unwrap()
+            .read()
+            .unwrap_err()
+            .code,
+        "blameUnavailable"
+    );
+}
+
+#[test]
+fn document_previews_resolve_only_open_project_files_and_keep_independent_image_leases() {
+    let mut f = Fixture::new();
+    std::fs::create_dir(f.root.join("docs")).unwrap();
+    std::fs::create_dir(f.root.join("images")).unwrap();
+    f.write("docs/readme.md", "![image](../images/a%20b.png)");
+    f.write("images/a b.png", "image bytes");
+    f.write("other.md", "other document");
+    let document = f.w.register("docs/readme.md".into());
+    assert!(f.w.preview_link(&document, "../other.md").is_err());
+    f.w.document_open(&document, &f.storage).unwrap();
+    assert_eq!(
+        f.w.preview_link(&document, "../other.md").unwrap().path,
+        "other.md"
+    );
+    let image = f.w.preview_image(&document, "../images/a%20b.png").unwrap();
+    let second = f.w.preview_image(&document, "../images/a%20b.png").unwrap();
+    assert_ne!(image.token, second.token);
+    assert!(f.w.media.contains_key(&image.token));
+    let image_entry = f.w.register("images/a b.png".into());
+    let tab = f.w.media_open(&image_entry).unwrap().unwrap();
+    assert!(f.w.media.contains_key(&image.token));
+    assert!(f.w.media.contains_key(&second.token));
+    f.w.media.remove(&image.token);
+    assert!(f.w.media.contains_key(&tab.token));
+    for href in [
+        "../../outside",
+        "../.git/config",
+        "https://example.invalid/image.png",
+        "../other.md",
+    ] {
+        assert!(f.w.preview_image(&document, href).is_err(), "{href}");
+    }
+    f.w.documents.remove(&document);
+    assert!(f.w.preview_image(&document, "../images/a%20b.png").is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn document_preview_rejects_symlink_images_and_parents() {
+    use std::os::unix::fs::symlink;
+    let mut f = Fixture::new();
+    f.write("readme.md", "image");
+    f.write("real.png", "image");
+    symlink(f.root.join("real.png"), f.root.join("link.png")).unwrap();
+    let document = f.w.register("readme.md".into());
+    f.w.document_open(&document, &f.storage).unwrap();
+    assert!(f.w.preview_image(&document, "link.png").is_err());
+    symlink(f.root.clone(), f.root.join("linked")).unwrap();
+    assert!(f.w.preview_image(&document, "linked/real.png").is_err());
+}
+
+#[test]
+fn blame_keeps_utf8_bom_attribution_and_refuses_binary_and_utf16_views() {
+    let mut f = Fixture::new();
+    f.write("bom", "\u{feff}first\nsecond\n");
+    f.commit();
+    let id = f.w.register("bom".into());
+    f.w.document_open(&id, &f.storage).unwrap();
+    let Response::GitBlame { blame } =
+        f.w.blame_read(&f.git, &id, "first\nsecond\n".into())
+            .unwrap()
+            .read()
+            .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(blame.lines.len(), 2);
+    assert!(
+        blame
+            .commits
+            .iter()
+            .all(|commit| !commit.id.bytes().all(|byte| byte == b'0'))
+    );
+    for (name, bytes) in [
+        ("binary", vec![0, 1, 2]),
+        ("utf16", vec![0xff, 0xfe, b'a', 0, 10, 0]),
+    ] {
+        std::fs::write(f.root.join(name), bytes).unwrap();
+        let id = f.w.register(name.into());
+        f.w.document_open(&id, &f.storage).unwrap();
+        assert_eq!(
+            f.w.blame_read(&f.git, &id, "a\n".into())
+                .err()
+                .unwrap()
+                .code,
+            "blameUnavailable"
+        );
+    }
 }

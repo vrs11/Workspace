@@ -23,6 +23,7 @@ static READERS: AtomicUsize = AtomicUsize::new(0);
 #[derive(Clone)]
 pub struct Preview {
     pub info: Media,
+    pub embedded: bool,
     file: Arc<Mutex<File>>,
 }
 pub type Previews = HashMap<String, Preview>;
@@ -56,6 +57,20 @@ fn format(name: &str) -> Option<(&'static str, &'static str)> {
 }
 impl Workspace {
     pub fn media_open(&mut self, entry: &str) -> Result<Option<Media>> {
+        self.media_open_kind(entry, false)
+    }
+    pub fn embedded_image(&mut self, entry: &str) -> Result<Media> {
+        let path = self.document_path(entry)?;
+        if !format(&path.to_string_lossy()).is_some_and(|(kind, _)| kind == "image") {
+            return Err(AppError::new(
+                "unsupported",
+                "Only local images can be embedded in a document preview",
+            ));
+        }
+        self.media_open_kind(entry, true)?
+            .ok_or_else(|| AppError::new("unsupported", "Unsupported preview image"))
+    }
+    fn media_open_kind(&mut self, entry: &str, embedded: bool) -> Result<Option<Media>> {
         let path = self.document_path(entry)?;
         let Some((kind, mime)) = format(&path.to_string_lossy()) else {
             return Ok(None);
@@ -75,7 +90,10 @@ impl Workspace {
                 "Image exceeds the 32 MiB preview limit. Use an image tool to resize it; the original is unchanged.",
             ));
         }
-        self.media.retain(|_, preview| preview.info.entry != entry);
+        if !embedded {
+            self.media
+                .retain(|_, preview| preview.embedded || preview.info.entry != entry);
+        }
         if self.media.len() >= 64 {
             return Err(AppError::new(
                 "resourceLimit",
@@ -95,6 +113,7 @@ impl Workspace {
             info.token.clone(),
             Preview {
                 info: info.clone(),
+                embedded,
                 file: Arc::new(Mutex::new(file)),
             },
         );
@@ -297,6 +316,7 @@ mod tests {
         use std::io::Write;
         file.write_all(b"0123456789").unwrap();
         let preview = Preview {
+            embedded: false,
             file: Arc::new(Mutex::new(file)),
             info: Media {
                 entry: "e".into(),

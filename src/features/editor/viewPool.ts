@@ -63,6 +63,8 @@ export function leaseEditorView(
   current.editor.updateOptions({
     fontSize: options.fontSize,
     readOnly: options.readOnly,
+    wordWrap: options.wordWrap,
+    lineNumbers: options.lineNumbers,
   });
   current.editor.setModel(options.model ?? null);
   return {

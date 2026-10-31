@@ -65,6 +65,10 @@ pub struct Settings {
     pub git: Option<String>,
     pub theme: String,
     pub font_size: u32,
+    #[serde(default)]
+    pub editor_soft_wrap: bool,
+    #[serde(default = "enabled")]
+    pub editor_line_numbers: bool,
     pub recent: Vec<Project>,
     #[serde(default)]
     pub shell: Option<String>,
@@ -261,6 +265,29 @@ pub struct GitStatus {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct BlameCommit {
+    pub id: String,
+    pub author: String,
+    pub email: String,
+    pub timestamp: f64,
+    pub summary: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BlameLine {
+    pub line: u32,
+    pub original_line: u32,
+    pub commit: u32,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlame {
+    pub entry: String,
+    pub commits: Vec<BlameCommit>,
+    pub lines: Vec<BlameLine>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct Diff {
     pub id: String,
     pub entry: String,
@@ -342,6 +369,10 @@ pub enum Request {
     Settings {
         settings: Settings,
     },
+    EditorOptions {
+        soft_wrap: Option<bool>,
+        line_numbers: Option<bool>,
+    },
     PickExecutable {
         tool: String,
     },
@@ -393,6 +424,16 @@ pub enum Request {
     CloseMedia {
         scope: String,
         token: String,
+    },
+    PreviewImage {
+        scope: String,
+        document: String,
+        href: String,
+    },
+    PreviewLink {
+        scope: String,
+        document: String,
+        href: String,
     },
     OpenDocument {
         scope: String,
@@ -502,6 +543,11 @@ pub enum Request {
     GitDecorations {
         scope: String,
         entries: Vec<String>,
+    },
+    GitBlame {
+        scope: String,
+        entry: String,
+        text: String,
     },
     GitDiff {
         scope: String,
@@ -731,6 +777,9 @@ pub enum Response {
     GitDecorations {
         decorations: Vec<GitDecoration>,
     },
+    GitBlame {
+        blame: GitBlame,
+    },
     Diff {
         diff: Diff,
     },
@@ -806,6 +855,9 @@ pub fn export_types() -> String {
         GitFileStatus::decl(),
         GitDecoration::decl(),
         GitStatus::decl(),
+        BlameCommit::decl(),
+        BlameLine::decl(),
+        GitBlame::decl(),
         GitConflict::decl(),
         Diff::decl(),
         NamedItem::decl(),

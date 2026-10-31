@@ -31,6 +31,7 @@ vi.mock("../../src/features/editor/monaco", () => ({
           return { dispose: vi.fn() };
         },
         setModel: vi.fn(),
+        updateOptions: vi.fn(),
       }),
     },
   },
@@ -42,6 +43,10 @@ vi.mock("../../src/features/editor/languages", () => ({
   languageFor: () => "plaintext",
 }));
 vi.mock("../../src/features/editor/models", () => ({ loadDocument: vi.fn() }));
+vi.mock("../../src/features/editor/viewOptions", () => ({
+  editorViewOptions: () => ({}),
+  installGutterMenu: () => () => {},
+}));
 const diff: Diff = {
   id: "comparison",
   entry: "file",

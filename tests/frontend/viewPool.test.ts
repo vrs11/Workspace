@@ -44,6 +44,8 @@ it("reuses an empty view while releasing closed models and detaching its DOM", (
     model: b,
     fontSize: 17,
     readOnly: true,
+    wordWrap: "on",
+    lineNumbers: "off",
   });
   expect(next.editor).toBe(first.editor);
   expect(next.host).toBe(first.host);
@@ -53,6 +55,8 @@ it("reuses an empty view while releasing closed models and detaching its DOM", (
   expect(f.editor.updateOptions).toHaveBeenLastCalledWith({
     fontSize: 17,
     readOnly: true,
+    wordWrap: "on",
+    lineNumbers: "off",
   });
   next.release();
 });

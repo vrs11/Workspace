@@ -11,6 +11,8 @@ import { rememberEditorFile } from "../../shared/fileTargets";
 import { ArrowUp, ArrowDown } from "lucide-react";
 import { shortcutLabel } from "../../shared/keymap";
 import type { editor } from "monaco-editor";
+import { editorViewOptions, installGutterMenu } from "./viewOptions";
+import { GutterContextMenu } from "./EditorViewMenu";
 export default function DiffEditor({
   diff,
   staged,
@@ -25,6 +27,9 @@ export default function DiffEditor({
   const comparison = useRef<editor.IStandaloneDiffEditor | null>(null);
   const [failure, setFailure] = useState("");
   const theme = useApp((s) => s.settings?.theme);
+  const softWrap = useApp((s) => s.settings?.editorSoftWrap);
+  const numbers = useApp((s) => s.settings?.editorLineNumbers);
+  const [context, setContext] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
     setReady(false);
     setHasChanges(false);
@@ -54,6 +59,10 @@ export default function DiffEditor({
           minimap: { enabled: false },
           fixedOverflowWidgets: true,
           useShadowDOM: false,
+          ...editorViewOptions(),
+          diffWordWrap: useApp.getState().settings?.editorSoftWrap
+            ? "on"
+            : "off",
         });
         comparison.current = editor;
         const originalInteractions = installEditorInteractions(
@@ -64,6 +73,10 @@ export default function DiffEditor({
           editor.getModifiedEditor(),
           monaco,
         );
+        const gutters = [
+          editor.getOriginalEditor(),
+          editor.getModifiedEditor(),
+        ].map((view) => installGutterMenu(view, monaco, setContext));
         const updated = editor.onDidUpdateDiff(() => {
           if (!gone) {
             editor.getOriginalEditor().render(true);
@@ -76,6 +89,7 @@ export default function DiffEditor({
           updated.dispose();
           originalInteractions();
           modifiedInteractions();
+          gutters.forEach((stop) => stop());
           editor.dispose();
           if (comparison.current === editor) comparison.current = null;
           original.dispose();
@@ -102,6 +116,12 @@ export default function DiffEditor({
       dispose?.();
     };
   }, [diff, inline, theme]);
+  useEffect(() => {
+    comparison.current?.updateOptions({
+      ...editorViewOptions(),
+      diffWordWrap: softWrap ? "on" : "off",
+    });
+  }, [softWrap, numbers]);
   const navigate = (direction: "next" | "previous") => {
     comparison.current?.goToDiff(direction);
     comparison.current?.getModifiedEditor().focus();
@@ -150,6 +170,11 @@ export default function DiffEditor({
           Edit file
         </button>
       </div>
+      <GutterContextMenu
+        point={context}
+        onClose={() => setContext(null)}
+        onFocus={() => comparison.current?.getModifiedEditor().focus()}
+      />
       <div
         className="editor-surface"
         ref={ref}

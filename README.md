@@ -41,6 +41,7 @@ pnpm test:desktop:docking
 pnpm test:desktop:interaction
 pnpm test:desktop:explorer
 pnpm test:desktop:editor
+pnpm test:desktop:views
 pnpm test:desktop:pointer
 pnpm test:desktop:features
 pnpm test:perf
@@ -53,7 +54,7 @@ pnpm build
 pnpm check:release-boundary
 ```
 
-`pnpm dev` starts desktop development. `pnpm build` creates an **optimized, unsigned development package**. `desktop:build` creates a separate test executable in `artifacts/desktop-test`, containing an embedded WebDriver and test app-data override. Never distribute that executable. Ordinary and test frontend assets use separate `dist` and `dist-desktop-test` directories. Close the ordinary application before testing. Native desktop tests run one at a time and use disposable repositories and a local bare remote. No implementation remote is pushed.
+`pnpm dev` starts desktop development. `pnpm build` creates an **optimized, unsigned development package**. `desktop:build` creates a separate test executable in `artifacts/desktop-test`, containing an embedded WebDriver and test app-data override. Never distribute that executable. Ordinary and test frontend assets use separate `dist` and `dist-desktop-test` directories. Tests use their own application identity and disposable data; leave existing user apps running. Native desktop tests run one at a time and use disposable repositories and a local bare remote. No implementation remote is pushed.
 
 Optimized measurements use `pnpm test:perf:desktop` for normal-process startup/all-WebKit resources, and `pnpm desktop:build:perf` then `pnpm test:desktop:perf` for actual editor/input paint. Run these and all GUI suites sequentially. An active visible desktop is required for foreground acceptance; hidden views are recorded as blocked. `pnpm test:disk-full` tests actual ENOSPC on a disposable macOS volume. Linux native prerequisites support `pnpm test:glib`; `pnpm check:windows-api` checks APIs with official Zig 0.17.0 and the Windows GNU Rust target, without executing Windows code.
 
@@ -67,6 +68,25 @@ and required source archives are generated into ignored `artifacts/legal/` and
 included in app packages; they are not stored in the source tree.
 
 ## Using the workspace
+
+Use **Editor view options** beside the editor tabs, or right-click a visible
+line number, to toggle **Soft wrap**, **Show line numbers** and **Git blame**.
+The native **Editor** menu and command palette provide the same controls.
+Wrap and line-number preferences persist and apply to split editors and diffs.
+When line numbers are hidden, use a menu to restore them. Blame annotates the
+current buffer in a trusted Git project, marks unsaved lines as Uncommitted, and
+shows author, date, commit and original line details when selected. It runs only
+when enabled; files without committed history show an explanation.
+
+Markdown, HTML, CSV and TSV files offer **Code**, **Side by side** and
+**Rendered** buttons. Previews update from unsaved text, retaining editor undo
+and selection across mode changes. Markdown supports tables, task lists and
+fenced code; CSV/TSV support quoted fields and embedded newlines. HTML previews
+show static document content. Scripts, forms and document-supplied styles do not
+run. Local image references and file links stay inside the open project; remote
+images are not loaded, and HTTPS links open only when clicked. Rendering is
+limited to 1 MiB of source, 25,000 elements and 16 local images; table previews
+support up to 10,000 rows and 256 columns. Larger files remain available in Code.
 
 Syntax highlighting detects the complete bundled Monaco language registry (92 modes in the current build): TypeScript/JavaScript and JSX/TSX, HTML/CSS/SCSS, Java/Kotlin, Python, Go, Rust, C/C++/C#, PHP, Ruby, Swift, SQL, JSON/YAML, shell and common configuration formats. Dockerfile and Makefile work without extensions; TOML has its own grammar. Vue/Svelte/Astro use HTML/template highlighting. Select a language in the status bar for an unknown extension. Diffs use the same detection. This is syntax support, not a bundled language-server/build/debug system.
 

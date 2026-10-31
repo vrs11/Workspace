@@ -106,6 +106,7 @@ impl Windows {
             close_requested: AtomicBool::new(false),
             decoration_worker: tokio::sync::Mutex::new(()),
             decoration_generation: AtomicU64::new(0),
+            blame_workers: tokio::sync::Semaphore::new(2),
             preferences: self.preferences.clone(),
             files: Default::default(),
             launches: Default::default(),
@@ -445,10 +446,36 @@ pub(crate) fn install_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             )?],
         )?)?;
     }
+    let editor_items = [
+        ("editor.softWrap", "Toggle Soft Wrap"),
+        ("editor.lineNumbers", "Show / Hide Line Numbers"),
+        ("editor.blame", "Show / Hide Git Blame"),
+        ("preview.code", "Document: Code"),
+        ("preview.split", "Document: Side by Side"),
+        ("preview.rendered", "Document: Rendered"),
+    ]
+    .into_iter()
+    .map(|(id, label)| MenuItem::with_id(app, id, label, true, None::<&str>))
+    .collect::<tauri::Result<Vec<_>>>()?;
+    let refs = editor_items
+        .iter()
+        .map(|item| item as &dyn tauri::menu::IsMenuItem<_>)
+        .collect::<Vec<_>>();
+    menu.append(&Submenu::with_items(app, "Editor", true, &refs)?)?;
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| {
         if event.id().as_ref() == "workspace-new-window" {
             launch(app, None);
+        } else if event.id().as_ref().starts_with("editor.")
+            || event.id().as_ref().starts_with("preview.")
+        {
+            if let Some(window) = app
+                .webview_windows()
+                .values()
+                .find(|window| window.is_focused().unwrap_or(false))
+            {
+                let _ = app.emit_to(window.label(), "editor-view-command", event.id().as_ref());
+            }
         }
     });
     Ok(())

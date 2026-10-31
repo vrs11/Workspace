@@ -79,6 +79,23 @@ if (!process.env.AW_DESKTOP_PROJECT) {
   }
   if (process.env.AW_DESKTOP_EDITOR_ONLY === "1")
     writeFileSync(join(project, "multi.txt"), "item1 item2 item3\n");
+  if (process.env.AW_DESKTOP_VIEWS_ONLY === "1") {
+    writeFileSync(
+      join(project, "README.md"),
+      "# Preview title\n\n" +
+        "A long readable line ".repeat(90) +
+        "\n\n- [x] Complete\n\n```ts\nconst ready = true;\n```\n\n![Local](pixels.png)\n\n![Remote](https://example.invalid/private.png)\n",
+    );
+    writeFileSync(join(project, "pixels.png"), pixelFixture());
+    writeFileSync(
+      join(project, "data.csv"),
+      'name,value\n"two, words","<b>literal</b>"\n',
+    );
+    writeFileSync(
+      join(project, "page.html"),
+      '<h1>Static page</h1><script>window.previewExecuted=true</script><style>body{display:none}</style><p onclick="alert(1)">Safe content</p>',
+    );
+  }
   if (performanceSuite) {
     mkdirSync(join(project, "load"));
     const content = "search_fixture_bytes\n".repeat(3200);
@@ -96,6 +113,11 @@ if (!process.env.AW_DESKTOP_PROJECT) {
   run("init", "--bare", remote);
   run("remote", "add", "origin", remote);
   run("push", "--set-upstream", "origin", "main");
+  if (process.env.AW_DESKTOP_VIEWS_ONLY === "1")
+    writeFileSync(
+      join(project, "hello.ts"),
+      'export const greeting = "' + "modified long line ".repeat(120) + '";\n',
+    );
   writeFileSync(
     join(data, "settings.json"),
     JSON.stringify({
@@ -139,31 +161,33 @@ export const config = {
   runner: "local",
   specs: [
     resolve(
-      process.env.AW_DESKTOP_INTEROP_ONLY === "1"
-        ? "tests/desktop/interoperability.spec.ts"
-        : process.env.AW_DESKTOP_FILES_ONLY === "1"
-          ? "tests/desktop/file-transfer.spec.ts"
-          : performanceSuite
-            ? "tests/desktop/performance.spec.ts"
-            : process.env.AW_DESKTOP_STABILITY_ONLY === "1"
-              ? "tests/desktop/stability.spec.ts"
-              : process.env.AW_DESKTOP_REPAIR_ONLY === "1"
-                ? "tests/desktop/repair.spec.ts"
-                : process.env.AW_DESKTOP_LAUNCH_ONLY === "1"
-                  ? "tests/desktop/launch.spec.ts"
-                  : process.env.AW_DESKTOP_INTERACTION_ONLY === "1"
-                    ? "tests/desktop/interaction.spec.ts"
-                    : process.env.AW_DESKTOP_DOCKING_ONLY === "1"
-                      ? "tests/desktop/docking.spec.ts"
-                      : process.env.AW_DESKTOP_EXPLORER_ONLY === "1"
-                        ? "tests/desktop/explorer.spec.ts"
-                        : process.env.AW_DESKTOP_EDITOR_ONLY === "1"
-                          ? "tests/desktop/editor.spec.ts"
-                          : process.env.AW_DESKTOP_FEATURES_ONLY === "1"
-                            ? "tests/desktop/features.spec.ts"
-                            : process.env.AW_DESKTOP_POINTER_ONLY === "1"
-                              ? "tests/desktop/pointer.spec.ts"
-                              : "tests/desktop/workflow.spec.ts",
+      process.env.AW_DESKTOP_VIEWS_ONLY === "1"
+        ? "tests/desktop/editor-views.spec.ts"
+        : process.env.AW_DESKTOP_INTEROP_ONLY === "1"
+          ? "tests/desktop/interoperability.spec.ts"
+          : process.env.AW_DESKTOP_FILES_ONLY === "1"
+            ? "tests/desktop/file-transfer.spec.ts"
+            : performanceSuite
+              ? "tests/desktop/performance.spec.ts"
+              : process.env.AW_DESKTOP_STABILITY_ONLY === "1"
+                ? "tests/desktop/stability.spec.ts"
+                : process.env.AW_DESKTOP_REPAIR_ONLY === "1"
+                  ? "tests/desktop/repair.spec.ts"
+                  : process.env.AW_DESKTOP_LAUNCH_ONLY === "1"
+                    ? "tests/desktop/launch.spec.ts"
+                    : process.env.AW_DESKTOP_INTERACTION_ONLY === "1"
+                      ? "tests/desktop/interaction.spec.ts"
+                      : process.env.AW_DESKTOP_DOCKING_ONLY === "1"
+                        ? "tests/desktop/docking.spec.ts"
+                        : process.env.AW_DESKTOP_EXPLORER_ONLY === "1"
+                          ? "tests/desktop/explorer.spec.ts"
+                          : process.env.AW_DESKTOP_EDITOR_ONLY === "1"
+                            ? "tests/desktop/editor.spec.ts"
+                            : process.env.AW_DESKTOP_FEATURES_ONLY === "1"
+                              ? "tests/desktop/features.spec.ts"
+                              : process.env.AW_DESKTOP_POINTER_ONLY === "1"
+                                ? "tests/desktop/pointer.spec.ts"
+                                : "tests/desktop/workflow.spec.ts",
     ),
   ],
   maxInstances: 1,
@@ -192,7 +216,7 @@ export const config = {
   mochaOpts: {
     grep: process.env.AW_DESKTOP_GREP,
     timeout: process.env.AW_DESKTOP_STABILITY_ONLY === "1" ? 300000 : 180000,
-    bail: true,
+    bail: process.env.AW_DESKTOP_VIEWS_ONLY !== "1",
   },
   before: async () => {
     console.info("Verifying native desktop driver");

@@ -41,7 +41,7 @@ pub fn command(
 ) -> Result<process::Output> {
     command_with_timeout(exe, root, args, input, Duration::from_secs(120))
 }
-fn command_with_timeout(
+pub(crate) fn command_with_timeout(
     exe: &Path,
     root: &Path,
     args: &[OsString],

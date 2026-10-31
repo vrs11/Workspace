@@ -60,6 +60,7 @@ const child = spawn(
       AW_DESKTOP_EXPLORER_ONLY: process.argv.includes("--explorer") ? "1" : "0",
       AW_DESKTOP_FEATURES_ONLY: process.argv.includes("--features") ? "1" : "0",
       AW_DESKTOP_EDITOR_ONLY: process.argv.includes("--editor") ? "1" : "0",
+      AW_DESKTOP_VIEWS_ONLY: process.argv.includes("--views") ? "1" : "0",
       AW_DESKTOP_POINTER_ONLY: process.argv.includes("--pointer") ? "1" : "0",
       AW_DESKTOP_DOCKING_ONLY: process.argv.includes("--docking") ? "1" : "0",
       AW_DESKTOP_INTERACTION_ONLY: process.argv.includes("--interaction")

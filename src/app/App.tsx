@@ -6,6 +6,12 @@ import { installViewResources } from "../features/workspace/viewResources";
 import { chooseCurrentWindow } from "../features/workspace/projectWindow";
 import StatusBar from "./StatusBar";
 import { EditorTabs } from "../features/editor/EditorTabs";
+import { EditorViewMenu } from "../features/editor/EditorViewMenu";
+import {
+  editorCommandLabels,
+  runEditorCommand,
+  installEditorCommands,
+} from "../features/editor/editorCommands";
 import { MetadataWarning } from "../features/editor/MetadataWarning";
 import { createTabCloser } from "../features/editor/tabActions";
 import {
@@ -87,7 +93,7 @@ import {
   reconcileDocuments,
 } from "../features/editor/models";
 const MediaPreview = lazy(() => import("../features/media/MediaPreview"));
-const Editor = lazy(() => import("../features/editor/Editor"));
+const Editor = lazy(() => import("../features/editor/DocumentEditor"));
 const DiffEditor = lazy(() => import("../features/editor/DiffEditor"));
 const ConflictEditor = lazy(() => import("../features/editor/ConflictEditor"));
 const GitConflictEditor = lazy(
@@ -491,6 +497,17 @@ export default function App() {
         if (!disposed) notice(payload);
       }),
     );
+    void watch(
+      listen<string>("editor-view-command", ({ payload }) => {
+        if (
+          !disposed &&
+          !document.querySelector('.dialog-content[role="dialog"]')
+        )
+          void runEditorCommand(payload).catch((error) =>
+            notice(errorText(error)),
+          );
+      }),
+    );
     return () => {
       disposed = true;
       stops.forEach((stop) => stop());
@@ -697,6 +714,7 @@ export default function App() {
     [],
   );
   useEffect(() => installShortcutRouter(), []);
+  useEffect(() => installEditorCommands(), []);
   useEffect(() => {
     const handler = (event: Event) => {
       const command = (event as CustomEvent<string>).detail;
@@ -806,6 +824,11 @@ export default function App() {
     return () => window.removeEventListener("workspace-command", handler);
   }, [closeTab, openProject, showPanel, openQuickOpen]);
   const commands = [
+    ...editorCommandLabels.map(([id, label]) => ({
+      id,
+      label,
+      run: () => runEditorCommand(id),
+    })),
     ...(state.project
       ? [
           {
@@ -1230,6 +1253,13 @@ export default function App() {
                         onClose={closeTab}
                       />
                       <div className="header-spacer" />
+                      {active && active.kind !== "media" && (
+                        <EditorViewMenu
+                          entry={
+                            active.kind === "editor" ? active.entry : undefined
+                          }
+                        />
+                      )}
                       {!(
                         state.settings?.autoSaveIdle ||
                         state.settings?.autoSaveOnFocusLoss
@@ -1474,6 +1504,7 @@ export default function App() {
                       >
                         Close split
                       </button>
+                      <EditorViewMenu entry={state.split} />
                     </div>
                     <Suspense fallback="Loading editor…">
                       <Editor entry={state.split} group="secondary" />

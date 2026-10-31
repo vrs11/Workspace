@@ -23,6 +23,22 @@ export function applicationShortcuts(): Shortcut[] {
   if (applicationDefaults?.mac === platformMac) return applicationDefaults.rows;
   const m = mod();
   const rows: Shortcut[] = [
+    definition("editor.softWrap", "Toggle soft wrap", "Workspace", ["Alt+Z"]),
+    definition("editor.lineNumbers", "Show / hide line numbers", "Workspace", [
+      `${m}+Alt+Shift+L`,
+    ]),
+    definition("editor.blame", "Show / hide Git blame", "Workspace", [
+      `${m}+Alt+Shift+B`,
+    ]),
+    definition("preview.code", "Document: Code", "Workspace", [
+      `${m}+Alt+Shift+1`,
+    ]),
+    definition("preview.split", "Document: Side by side", "Workspace", [
+      `${m}+Alt+Shift+2`,
+    ]),
+    definition("preview.rendered", "Document: Rendered", "Workspace", [
+      `${m}+Alt+Shift+3`,
+    ]),
     definition("diff.previousChange", "Previous change", "Diff", [
       "Alt+ArrowUp",
     ]),

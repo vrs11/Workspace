@@ -46,6 +46,8 @@ beforeEach(() => {
       git: null,
       theme: "dark",
       fontSize: 14,
+      editorSoftWrap: false,
+      editorLineNumbers: true,
       recent: [],
       shell: null,
       shellArgs: [],

@@ -268,6 +268,8 @@ pub fn default_settings() -> Settings {
         git: installed(if cfg!(windows) { "git.exe" } else { "git" }),
         theme: "dark".into(),
         font_size: 14,
+        editor_soft_wrap: false,
+        editor_line_numbers: true,
         recent: vec![],
         shell: None,
         shell_args: vec![],
