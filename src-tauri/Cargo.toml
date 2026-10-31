@@ -23,7 +23,6 @@ drag = "=2.1.1"
 tauri = { version = "=2.12.5", features = [] }
 tauri-plugin-clipboard-manager = "=2.5.0"
 tauri-plugin-dialog = { version = "=2.8.3", features = [] }
-tauri-plugin-single-instance = { version = "=2.5.4", features = [] }
 tauri-plugin-updater = { version = "=2.14.0", features = [] }
 tauri-plugin-wdio-webdriver = { version = "=1.5.1", features = [], optional = true }
 tokio = { version = "=1.54.1", features = ["full"] }
@@ -55,10 +54,14 @@ xattr = "=1.6.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.5"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSPasteboard", "NSPasteboardItem"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "=0.18.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Storage_FileSystem", "Win32_Security_Authorization", "Win32_System_IO", "Win32_System_Ioctl", "Wdk_Foundation", "Wdk_Storage_FileSystem"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Storage_FileSystem", "Win32_Security_Authorization", "Win32_System_IO", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_Shell", "Win32_System_Ioctl", "Wdk_Foundation", "Wdk_Storage_FileSystem"] }
 
 [build-dependencies]
 tauri-build = { version = "=2.7.4", features = [] }

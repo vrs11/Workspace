@@ -13,12 +13,12 @@ use std::{
         atomic::{AtomicU8, Ordering},
     },
 };
-struct Source {
-    parent: Dir,
-    leaf: PathBuf,
-    absolute: PathBuf,
-    relative: Option<PathBuf>,
-    kind: String,
+pub(crate) struct Source {
+    pub(crate) parent: Dir,
+    pub(crate) leaf: PathBuf,
+    pub(crate) absolute: PathBuf,
+    pub(crate) relative: Option<PathBuf>,
+    pub(crate) kind: String,
 }
 pub struct IncomingMove {
     pub scope: String,
@@ -39,7 +39,7 @@ impl Drop for IncomingMove {
         self.activity.store(0, Ordering::SeqCst);
     }
 }
-fn source(path: &Path, root: &Path) -> Result<Source> {
+pub(crate) fn source(path: &Path, root: &Path) -> Result<Source> {
     if !path.is_absolute() || path.as_os_str().len() > 8192 {
         return Err(AppError::new(
             "unsafePath",

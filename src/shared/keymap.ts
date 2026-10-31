@@ -1,7 +1,7 @@
 import { useApp, notice } from "./state/store";
 import { doubleShiftGesture } from "./doubleShift";
 export type ShortcutScope =
-  "Workspace" | "Editor" | "Terminal" | "Explorer" | "Git" | "Media";
+  "Workspace" | "Editor" | "Diff" | "Terminal" | "Explorer" | "Git" | "Media";
 export type Shortcut = {
   id: string;
   label: string;
@@ -23,6 +23,12 @@ export function applicationShortcuts(): Shortcut[] {
   if (applicationDefaults?.mac === platformMac) return applicationDefaults.rows;
   const m = mod();
   const rows: Shortcut[] = [
+    definition("diff.previousChange", "Previous change", "Diff", [
+      "Alt+ArrowUp",
+    ]),
+    definition("diff.nextChange", "Next change", "Diff", ["Alt+ArrowDown"]),
+    definition("explorer.copy", "Copy files", "Explorer", [`${m}+C`]),
+    definition("explorer.paste", "Paste files", "Explorer", [`${m}+V`]),
     definition("media.playPause", "Play / pause media", "Media", ["Space"]),
     definition("media.seekBack", "Seek media backward", "Media", ["ArrowLeft"]),
     definition("media.seekForward", "Seek media forward", "Media", [
@@ -474,11 +480,18 @@ export function installShortcutRouter() {
           ? "Git"
           : target?.closest(".media-preview")
             ? "Media"
-            : target?.closest(".monaco-editor")
-              ? "Editor"
-              : "Workspace";
+            : target?.closest(".diff-content")
+              ? "Diff"
+              : target?.closest(".monaco-editor")
+                ? "Editor"
+                : "Workspace";
     // Workspace keys deliberately yield to ordinary PTY input. Only explicit
     // terminal mappings are consumed there; Ctrl+C/D/Z remain programs' keys.
+    if (
+      scope === "Explorer" &&
+      target?.closest("input, textarea, select, [contenteditable=true]")
+    )
+      return;
     if (
       scope === "Media" &&
       target?.closest("input, textarea, select, button") &&
@@ -490,6 +503,7 @@ export function installShortcutRouter() {
     const candidates = applicationShortcuts().filter(
       (item) =>
         !item.id.startsWith("monaco:") &&
+        !(item.scope === "Diff" && target?.closest(".find-widget")) &&
         (item.scope === scope ||
           (item.scope === "Workspace" && scope !== "Terminal")),
     );

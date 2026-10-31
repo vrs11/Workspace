@@ -104,6 +104,8 @@ beforeEach(() => {
     notice: "",
   });
   vi.mocked(call).mockImplementation(async (request) => {
+    if (request.type === "clipboardHasFiles")
+      return { type: "clipboardFiles", available: true } as never;
     if (request.type === "list")
       return {
         type: "entries",
@@ -138,6 +140,9 @@ afterEach(cleanup);
 async function mount() {
   render(<Explorer />);
   await screen.findByText("a");
+  // The asynchronous native listing commits before React installs the latest
+  // drop listener. Flush that fixture setup before dispatching a synthetic drop.
+  await act(async () => {});
 }
 const selected = () =>
   screen
@@ -471,4 +476,182 @@ it("keeps a newer user selection when an earlier incoming move finishes", async 
     }),
   );
   expect(selected().map((row) => row.textContent)).toEqual(["a", "b"]);
+});
+
+it("copies a multi-selection as native file references without closing editors or moving files", async () => {
+  await mount();
+  fireEvent.click(screen.getByText("a"));
+  fireEvent.click(screen.getByText("b"), { metaKey: true });
+  await act(async () => {
+    window.dispatchEvent(
+      new CustomEvent("workspace-command", {
+        detail: "explorer.copy",
+        cancelable: true,
+      }),
+    );
+  });
+  await waitFor(() =>
+    expect(rpc).toHaveBeenCalledWith({
+      type: "copyFiles",
+      scope: "p",
+      entries: ["a", "b"],
+    }),
+  );
+  expect(closeAffectedEntry).not.toHaveBeenCalled();
+  expect(loadDocument).not.toHaveBeenCalled();
+  expect(selected()).toHaveLength(2);
+  expect(useApp.getState().notice).toContain("system clipboard");
+});
+it("pastes into the selected folder, selects completed copies and leaves original selections on failure", async () => {
+  await mount();
+  fireEvent.click(screen.getByText("dest"));
+  const copied: Entry = {
+    id: "copy",
+    name: "copy.txt",
+    path: "dest/copy.txt",
+    kind: "file",
+  };
+  const original = vi.mocked(call).getMockImplementation()!;
+  vi.mocked(call).mockImplementation(async (request, type) => {
+    if (request.type === "pasteFiles")
+      return { type: "fileDrop", entries: [copied], errors: [] } as never;
+    if (request.type === "list" && request.parent === "dest")
+      return { type: "entries", entries: [copied], truncated: false } as never;
+    return original(request, type);
+  });
+  await act(async () => {
+    window.dispatchEvent(
+      new CustomEvent("workspace-command", {
+        detail: "explorer.paste",
+        cancelable: true,
+      }),
+    );
+  });
+  await screen.findByText("copy.txt");
+  expect(call).toHaveBeenCalledWith(
+    { type: "pasteFiles", scope: "p", parent: "dest" },
+    "fileDrop",
+  );
+  expect(selected().map((row) => row.textContent)).toEqual(["copy.txt"]);
+  expect(closeAffectedEntry).not.toHaveBeenCalled();
+  expect(loadDocument).not.toHaveBeenCalled();
+  expect(useApp.getState().notice).toContain("Originals were kept");
+});
+it("provides paste at the project root through the blank-area context menu", async () => {
+  await mount();
+  fireEvent.click(screen.getByText("a"));
+  fireEvent.contextMenu(screen.getByRole("region", { name: "Project files" }), {
+    clientX: 10,
+    clientY: 20,
+  });
+  const paste = await screen.findByRole("menuitem", { name: "Paste" });
+  expect(screen.getByRole("menuitem", { name: "Copy" })).toHaveAttribute(
+    "data-disabled",
+  );
+  const original = vi.mocked(call).getMockImplementation()!;
+  vi.mocked(call).mockImplementation(async (request, type) =>
+    request.type === "pasteFiles"
+      ? ({
+          type: "fileDrop",
+          entries: [],
+          errors: ["No files on the clipboard"],
+        } as never)
+      : original(request, type),
+  );
+  fireEvent.click(paste);
+  await waitFor(() =>
+    expect(call).toHaveBeenCalledWith(
+      { type: "pasteFiles", scope: "p", parent: null },
+      "fileDrop",
+    ),
+  );
+  expect(useApp.getState().notice).toContain("No files on the clipboard");
+});
+it("ignores a late paste after project switching without altering the new tree or selection", async () => {
+  await mount();
+  fireEvent.click(screen.getByText("a"));
+  const original = vi.mocked(call).getMockImplementation()!;
+  let finish!: (value: unknown) => void;
+  vi.mocked(call).mockImplementation(async (request, type) =>
+    request.type === "pasteFiles"
+      ? (new Promise((resolve) => {
+          finish = resolve;
+        }) as never)
+      : original(request, type),
+  );
+  await act(async () => {
+    window.dispatchEvent(
+      new CustomEvent("workspace-command", {
+        detail: "explorer.paste",
+        cancelable: true,
+      }),
+    );
+  });
+  await waitFor(() => expect(finish).toBeDefined());
+  await act(async () => {
+    useApp.setState({
+      project: { ...useApp.getState().project!, id: "other" },
+    });
+  });
+  await screen.findByText("a");
+  fireEvent.click(screen.getByText("b"));
+  await act(async () => {
+    finish({
+      type: "fileDrop",
+      entries: [{ id: "old", path: "old", name: "old", kind: "file" }],
+      errors: [],
+    });
+  });
+  expect(selected().map((row) => row.textContent)).toEqual(["b"]);
+  expect(screen.queryByText("old")).toBeNull();
+  expect(useApp.getState().notice).not.toContain("pasted");
+});
+
+it("disables file Paste for an empty or text-only clipboard, including the keyboard command", async () => {
+  const original = vi.mocked(call).getMockImplementation()!;
+  vi.mocked(call).mockImplementation(async (request, type) =>
+    request.type === "clipboardHasFiles"
+      ? ({ type: "clipboardFiles", available: false } as never)
+      : original(request, type),
+  );
+  await mount();
+  fireEvent.contextMenu(screen.getByRole("region", { name: "Project files" }));
+  const paste = await screen.findByRole("menuitem", { name: "Paste" });
+  expect(paste).toHaveAttribute("data-disabled");
+  fireEvent.click(paste);
+  await act(async () => {
+    window.dispatchEvent(
+      new CustomEvent("workspace-command", {
+        detail: "explorer.paste",
+        cancelable: true,
+      }),
+    );
+  });
+  expect(
+    vi
+      .mocked(call)
+      .mock.calls.some(([request]) => request.type === "pasteFiles"),
+  ).toBe(false);
+});
+it("updates an open Paste menu when files are replaced with text and refreshes when reopening", async () => {
+  await mount();
+  fireEvent.contextMenu(screen.getByRole("region", { name: "Project files" }));
+  const paste = await screen.findByRole("menuitem", { name: "Paste" });
+  await waitFor(() => expect(paste).not.toHaveAttribute("data-disabled"));
+  const original = vi.mocked(call).getMockImplementation()!;
+  let available = false;
+  vi.mocked(call).mockImplementation(async (request, type) =>
+    request.type === "clipboardHasFiles"
+      ? ({ type: "clipboardFiles", available } as never)
+      : original(request, type),
+  );
+  await act(async () => {
+    window.dispatchEvent(new Event("workspace-clipboard-changed"));
+  });
+  expect(paste).toHaveAttribute("data-disabled");
+  available = true;
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  await waitFor(() => expect(paste).not.toHaveAttribute("data-disabled"));
 });

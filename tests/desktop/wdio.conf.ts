@@ -8,11 +8,13 @@ const performanceSuite = process.env.AW_DESKTOP_PERFORMANCE_ONLY === "1";
 const packaged =
   process.platform === "darwin" &&
   (performanceSuite || process.env.AW_DESKTOP_PACKAGED === "1");
-const desktopBinary = packaged
-  ? resolve("scripts/desktop-macos-launcher.mjs")
-  : resolve(
-      `artifacts/${performanceSuite ? "desktop-perf" : "desktop-test"}/agent-workspace${process.platform === "win32" ? ".exe" : ""}`,
-    );
+const desktopBinary =
+  process.env.AW_DESKTOP_BINARY ??
+  (packaged
+    ? resolve("scripts/desktop-macos-launcher.mjs")
+    : resolve(
+        `artifacts/${performanceSuite ? "desktop-perf" : "desktop-test"}/agent-workspace${process.platform === "win32" ? ".exe" : ""}`,
+      ));
 if (!process.env.AW_DESKTOP_PROJECT) {
   const sandbox = mkdtempSync(join(tmpdir(), "agent-workspace-desktop-"));
   const project = join(sandbox, "GUI fixture 🌍");
@@ -84,6 +86,11 @@ if (!process.env.AW_DESKTOP_PROJECT) {
       writeFileSync(join(project, "load", `file-${index}.txt`), content);
     writeFileSync(join(project, ".gitignore"), "load/\n");
   }
+  if (process.env.AW_DESKTOP_INTEROP_ONLY === "1")
+    writeFileSync(
+      join(project, "sections.txt"),
+      "header\nold first\n" + "context\n".repeat(35) + "old last\n",
+    );
   run("add", "--all");
   run("commit", "-m", "Fixture baseline");
   run("init", "--bare", remote);
@@ -132,29 +139,31 @@ export const config = {
   runner: "local",
   specs: [
     resolve(
-      process.env.AW_DESKTOP_FILES_ONLY === "1"
-        ? "tests/desktop/file-transfer.spec.ts"
-        : performanceSuite
-          ? "tests/desktop/performance.spec.ts"
-          : process.env.AW_DESKTOP_STABILITY_ONLY === "1"
-            ? "tests/desktop/stability.spec.ts"
-            : process.env.AW_DESKTOP_REPAIR_ONLY === "1"
-              ? "tests/desktop/repair.spec.ts"
-              : process.env.AW_DESKTOP_LAUNCH_ONLY === "1"
-                ? "tests/desktop/launch.spec.ts"
-                : process.env.AW_DESKTOP_INTERACTION_ONLY === "1"
-                  ? "tests/desktop/interaction.spec.ts"
-                  : process.env.AW_DESKTOP_DOCKING_ONLY === "1"
-                    ? "tests/desktop/docking.spec.ts"
-                    : process.env.AW_DESKTOP_EXPLORER_ONLY === "1"
-                      ? "tests/desktop/explorer.spec.ts"
-                      : process.env.AW_DESKTOP_EDITOR_ONLY === "1"
-                        ? "tests/desktop/editor.spec.ts"
-                        : process.env.AW_DESKTOP_FEATURES_ONLY === "1"
-                          ? "tests/desktop/features.spec.ts"
-                          : process.env.AW_DESKTOP_POINTER_ONLY === "1"
-                            ? "tests/desktop/pointer.spec.ts"
-                            : "tests/desktop/workflow.spec.ts",
+      process.env.AW_DESKTOP_INTEROP_ONLY === "1"
+        ? "tests/desktop/interoperability.spec.ts"
+        : process.env.AW_DESKTOP_FILES_ONLY === "1"
+          ? "tests/desktop/file-transfer.spec.ts"
+          : performanceSuite
+            ? "tests/desktop/performance.spec.ts"
+            : process.env.AW_DESKTOP_STABILITY_ONLY === "1"
+              ? "tests/desktop/stability.spec.ts"
+              : process.env.AW_DESKTOP_REPAIR_ONLY === "1"
+                ? "tests/desktop/repair.spec.ts"
+                : process.env.AW_DESKTOP_LAUNCH_ONLY === "1"
+                  ? "tests/desktop/launch.spec.ts"
+                  : process.env.AW_DESKTOP_INTERACTION_ONLY === "1"
+                    ? "tests/desktop/interaction.spec.ts"
+                    : process.env.AW_DESKTOP_DOCKING_ONLY === "1"
+                      ? "tests/desktop/docking.spec.ts"
+                      : process.env.AW_DESKTOP_EXPLORER_ONLY === "1"
+                        ? "tests/desktop/explorer.spec.ts"
+                        : process.env.AW_DESKTOP_EDITOR_ONLY === "1"
+                          ? "tests/desktop/editor.spec.ts"
+                          : process.env.AW_DESKTOP_FEATURES_ONLY === "1"
+                            ? "tests/desktop/features.spec.ts"
+                            : process.env.AW_DESKTOP_POINTER_ONLY === "1"
+                              ? "tests/desktop/pointer.spec.ts"
+                              : "tests/desktop/workflow.spec.ts",
     ),
   ],
   maxInstances: 1,

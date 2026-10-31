@@ -23,7 +23,7 @@ struct DeleteApproval {
     fingerprint: String,
     created: std::time::Instant,
 }
-fn delete_fingerprint(parent: &Dir, leaf: &Path) -> Result<(String, bool)> {
+pub(crate) fn entry_fingerprint(parent: &Dir, leaf: &Path) -> Result<(String, bool)> {
     let m = parent.symlink_metadata(leaf)?;
     let mut hash = blake3::Hasher::new();
     hash.update(
@@ -103,7 +103,7 @@ impl Workspace {
     pub fn review_delete(&mut self, entry: &str, storage: &Storage) -> Result<Response> {
         let path = self.permanent_delete_path(entry, storage)?;
         let (parent, leaf) = security::parent(&self.dir, &path)?;
-        let (fingerprint, directory) = delete_fingerprint(&parent, &leaf)?;
+        let (fingerprint, directory) = entry_fingerprint(&parent, &leaf)?;
         self.delete_reviews
             .pending
             .retain(|_, value| value.created.elapsed().as_secs() < 120);
@@ -147,7 +147,7 @@ impl Workspace {
             })?;
         let path = self.permanent_delete_path(entry, storage)?;
         let (parent, leaf) = security::parent(&self.dir, &path)?;
-        let (fingerprint, directory) = delete_fingerprint(&parent, &leaf)?;
+        let (fingerprint, directory) = entry_fingerprint(&parent, &leaf)?;
         if path != approval.path || fingerprint != approval.fingerprint {
             self.delete_reviews.pending.remove(review);
             return Err(AppError::conflict(
@@ -167,7 +167,7 @@ impl Workspace {
                     "Permanent deletion could not finish. Some folder contents may have been removed. Cancel and refresh before trying again.",
                 ));
             }
-            if delete_fingerprint(&parent, &leaf).is_ok_and(|(current, _)| current == fingerprint) {
+            if entry_fingerprint(&parent, &leaf).is_ok_and(|(current, _)| current == fingerprint) {
                 self.delete_reviews.pending.insert(review.into(), approval);
             }
             return Err(AppError::from(error).file_context("delete permanently", &path));

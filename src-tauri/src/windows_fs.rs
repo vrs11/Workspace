@@ -1023,3 +1023,57 @@ pub fn atomic_replace(
     }
     Ok(())
 }
+
+/// A new staged ordinary file. Existing reparse/stream/metadata guards remain;
+/// byte copying is streamed and never bounded by the editor preview limit.
+pub fn copy_file(source: &File, parent: &Dir, leaf: &Path) -> Result<()> {
+    if !supported_metadata(source)? {
+        return Err(unsupported(
+            "This file's Windows metadata cannot be preserved by Explorer copy; the original was kept",
+        ));
+    }
+    let mut output = Temporary {
+        file: open(
+            parent,
+            leaf,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE_ACCESS | WRITE_DAC | WRITE_OWNER,
+            true,
+            false,
+        )?,
+        committed: false,
+    };
+    std::io::copy(&mut source.try_clone()?, &mut output.file)?;
+    copy_security(source, &output.file)?;
+    copy_basic(source, &output.file)?;
+    output.file.sync_all()?;
+    output.committed = true;
+    Ok(())
+}
+fn copy_basic(source: &File, destination: &File) -> Result<()> {
+    let basic: FILE_BASIC_INFO = info(source, FileBasicInfo)?;
+    // SAFETY: live owned handles and an exactly sized FILE_BASIC_INFO buffer.
+    if unsafe {
+        SetFileInformationByHandle(
+            handle(destination),
+            FileBasicInfo,
+            (&basic as *const FILE_BASIC_INFO).cast(),
+            size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(last_error());
+    }
+    Ok(())
+}
+pub fn copy_directory_metadata(from: &Dir, source: &Path, to: &Dir, target: &Path) -> Result<()> {
+    let original = open(from, source, FILE_GENERIC_READ, false, true)?;
+    let copied = open(
+        to,
+        target,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | WRITE_DAC | WRITE_OWNER,
+        false,
+        true,
+    )?;
+    copy_security(&original, &copied)?;
+    copy_basic(&original, &copied)
+}

@@ -29,6 +29,8 @@ import { FilePathMenuItems } from "../../shared/components/FilePathMenu";
 import { activeFileEntry, tabEntry } from "../../shared/fileTargets";
 import { closeAffectedEntry } from "./closeAffected";
 import { deleteEntry } from "./deleteEntry";
+import { useFilePasteAvailability } from "./useFilePasteAvailability";
+import { shortcutLabel } from "../../shared/keymap";
 import { useDockVisible } from "../workspace/DockWorkspace";
 import {
   useGitDecorations,
@@ -46,6 +48,10 @@ function isOpenFile(entry: string) {
 function Explorer({ active = true }: { active?: boolean }) {
   const visible = useDockVisible();
   const project = useApp((s) => s.project);
+  const filePaste = useFilePasteAvailability(
+    !!project?.trusted && active && visible,
+    project?.id,
+  );
   const editorEntry = useApp((s) =>
     tabEntry(s.tabs.find((tab) => tab.id === s.active)),
   );
@@ -539,6 +545,65 @@ function Explorer({ active = true }: { active?: boolean }) {
         window.dispatchEvent(new Event("workspace-refresh"));
     }
   }
+  async function copyFiles() {
+    if (!project || pending.current) return;
+    const targets = selectionRoots(selectedEntries),
+      scope = project.id;
+    if (!targets.length) return;
+    pending.current = true;
+    try {
+      await rpc({
+        type: "copyFiles",
+        scope,
+        entries: targets.map((entry) => entry.id),
+      });
+      if (useApp.getState().project?.id === scope)
+        notice(`${targets.length} item(s) copied to the system clipboard.`);
+    } finally {
+      pending.current = false;
+    }
+  }
+  async function pasteFiles() {
+    if (!project || pending.current) return;
+    const scope = project.id,
+      destination = parent,
+      ticket = userSelection.current;
+    pending.current = true;
+    try {
+      if (
+        !(await filePaste.refresh()) ||
+        useApp.getState().project?.id !== scope
+      )
+        return;
+
+      const result = await call(
+        { type: "pasteFiles", scope, parent: destination },
+        "fileDrop",
+      );
+      if (useApp.getState().project?.id !== scope) return;
+      await load(destination);
+      if (useApp.getState().project?.id !== scope) return;
+      if (destination) setExpanded((old) => new Set(old).add(destination));
+      if (ticket === userSelection.current && result.entries.length) {
+        const next = {
+          ids: new Set(result.entries.map((entry) => entry.id)),
+          anchor: result.entries[0].id,
+        };
+        selectionRef.current = next;
+        setSelection(next);
+        setPrimary(result.entries.at(-1) ?? null);
+      }
+      notice(
+        result.errors.length
+          ? result.errors.join("\n")
+          : `${result.entries.length} item(s) pasted. Originals were kept.`,
+      );
+      if (result.entries.length)
+        window.dispatchEvent(new Event("workspace-refresh"));
+    } finally {
+      pending.current = false;
+    }
+  }
   async function removeSelected() {
     if (!project || pending.current) return;
     const targets = selectionRoots(selectedEntries),
@@ -744,6 +809,9 @@ function Explorer({ active = true }: { active?: boolean }) {
       setExpanded((old) => new Set(old).add(entry.id));
     }
   }
+  useEffect(() => {
+    if (context) void filePaste.refresh();
+  }, [context, filePaste.refresh]);
   const actionItems = (includeNew = false) => (
     <>
       {includeNew && (
@@ -763,6 +831,21 @@ function Explorer({ active = true }: { active?: boolean }) {
           <Menu.Separator />
         </>
       )}
+      <Menu.Item
+        disabled={!selectedEntries.length}
+        onSelect={() => void perform(copyFiles)}
+        title={shortcutLabel("explorer.copy")}
+      >
+        Copy
+      </Menu.Item>
+      <Menu.Item
+        disabled={!project?.trusted || !filePaste.available}
+        onSelect={() => void perform(pasteFiles)}
+        title={shortcutLabel("explorer.paste")}
+      >
+        Paste
+      </Menu.Item>
+      <Menu.Separator />
       <Menu.Item
         disabled={selectedEntries.length !== 1 || !project?.trusted}
         onSelect={() => void perform(() => rename(false))}
@@ -804,11 +887,20 @@ function Explorer({ active = true }: { active?: boolean }) {
       const id = (event as CustomEvent<string>).detail;
       if (!id.startsWith("explorer.")) return;
       event.preventDefault();
-      if (!project?.trusted && id !== "explorer.refresh") {
+      if (
+        !project?.trusted &&
+        !["explorer.refresh", "explorer.copy"].includes(id)
+      ) {
         notice("Trust the workspace before changing files.");
         return;
       }
       switch (id) {
+        case "explorer.copy":
+          void perform(copyFiles);
+          break;
+        case "explorer.paste":
+          void perform(pasteFiles);
+          break;
         case "explorer.newFile":
           void perform(() => create(false));
           break;
@@ -836,7 +928,41 @@ function Explorer({ active = true }: { active?: boolean }) {
     return () => window.removeEventListener("workspace-command", command);
   });
   return (
-    <section className="explorer" aria-label="Project files">
+    <section
+      className="explorer"
+      aria-label="Project files"
+      onContextMenu={(event) => {
+        if (
+          (event.target as HTMLElement).closest(
+            '[role="treeitem"], [role="menu"]',
+          )
+        )
+          return;
+        event.preventDefault();
+        setSelected(null);
+        setContext({ x: event.clientX, y: event.clientY });
+      }}
+      onCopy={(event) => {
+        if (
+          (event.target as HTMLElement).closest(
+            "input, textarea, [contenteditable=true]",
+          )
+        )
+          return;
+        event.preventDefault();
+        void perform(copyFiles);
+      }}
+      onPaste={(event) => {
+        if (
+          (event.target as HTMLElement).closest(
+            "input, textarea, [contenteditable=true]",
+          )
+        )
+          return;
+        event.preventDefault();
+        void perform(pasteFiles);
+      }}
+    >
       <div
         className={`explorer-toolbar ${dropTarget === "root" ? "drop-target" : ""}`}
         role="toolbar"
@@ -866,16 +992,20 @@ function Explorer({ active = true }: { active?: boolean }) {
             </Menu.Content>
           </Menu.Portal>
         </Menu.Root>
-        <Menu.Root>
+        <Menu.Root
+          onOpenChange={(open) => {
+            if (open) void filePaste.refresh();
+          }}
+        >
           <Menu.Trigger asChild>
             <button
               aria-label="Selected file actions"
               title={
                 selected
                   ? `Actions for ${selected.name}`
-                  : "Select a file or folder"
+                  : "File actions and paste into project root"
               }
-              disabled={!selected}
+              disabled={!project}
             >
               <Ellipsis size={14} />
               Actions

@@ -56,7 +56,9 @@
     "test:security": "bash scripts/licenses.sh && node --test tests/security-audit.test.mjs",
     "test:native-quit": "python3 scripts/test-native-quit-macos.py",
     "test:perf:session": "node scripts/perf-session-macos.mjs",
-    "check:package-resources": "node scripts/package-resources.mjs"
+    "check:package-resources": "node scripts/package-resources.mjs",
+    "prepare:desktop:interop": "node scripts/test-file-interop.mjs --prepare",
+    "test:desktop:interop": "node scripts/test-file-interop.mjs --run"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "1.3.1",

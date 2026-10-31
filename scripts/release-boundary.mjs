@@ -6,6 +6,8 @@ const graph = execFileSync(
   ["scripts/cargo.sh", "tree", "--locked", "-e", "normal"],
   { encoding: "utf8" },
 );
+if (/tauri-plugin-single-instance/.test(graph))
+  throw new Error("An application-wide single-instance dependency must not ship");
 if (/tauri-plugin-wdio/.test(graph))
   throw new Error("Test driver appears in ordinary native dependency graph");
 for (const file of readdirSync("dist/assets").filter((f) => f.endsWith(".js")))

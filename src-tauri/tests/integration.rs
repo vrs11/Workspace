@@ -3279,3 +3279,270 @@ fn permanent_folder_delete_does_not_follow_links_inside_or_in_parent_paths() {
         b"outside retained"
     );
 }
+
+fn copy_result(
+    f: &mut Fixture,
+    sources: &[PathBuf],
+    parent: Option<&str>,
+) -> (Vec<agent_workspace::dto::Entry>, Vec<String>) {
+    let job =
+        f.w.prepare_file_copy(sources, parent, &f.storage.root)
+            .unwrap();
+    let Response::FileDrop { entries, errors } =
+        job.execute(|job, stage| job.publish(&mut f.w, stage))
+    else {
+        panic!()
+    };
+    (entries, errors)
+}
+#[test]
+fn file_paste_keeps_originals_and_existing_files_and_generates_native_copy_names() {
+    let mut f = Fixture::new();
+    f.write("original.txt", "file bytes");
+    f.write("original copy.txt", "existing copy");
+    let path = f.root.join("original.txt");
+    let (entries, errors) = copy_result(&mut f, &[path.clone()], None);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(entries[0].name, "original copy 2.txt");
+    assert_eq!(std::fs::read(&path).unwrap(), b"file bytes");
+    assert_eq!(
+        std::fs::read(f.root.join("original copy.txt")).unwrap(),
+        b"existing copy"
+    );
+    assert_eq!(
+        std::fs::read(f.root.join(&entries[0].path)).unwrap(),
+        b"file bytes"
+    );
+    std::fs::create_dir(f.root.join("folder.v1")).unwrap();
+    f.write("folder.v1/child", "nested");
+    let folder = f.root.join("folder.v1");
+    let (entries, errors) = copy_result(&mut f, &[folder], None);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(entries[0].name, "folder.v1 copy");
+    assert_eq!(
+        std::fs::read(f.root.join("folder.v1 copy/child")).unwrap(),
+        b"nested"
+    );
+}
+#[test]
+fn file_paste_accepts_external_files_and_batches_without_closing_live_editors() {
+    let mut f = Fixture::new();
+    f.write("opened", "open bytes");
+    let id = f.w.register("opened".into());
+    f.w.document_open(&id, &f.storage).unwrap();
+    let external = f._tmp.path().join("outside file #🌍.txt");
+    std::fs::write(&external, b"outside bytes").unwrap();
+    std::fs::create_dir(f.root.join("destination")).unwrap();
+    let destination = f.w.register("destination".into());
+    let opened = f.root.join("opened");
+    let (entries, errors) = copy_result(&mut f, &[external.clone(), opened], Some(&destination));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(std::fs::read(&external).unwrap(), b"outside bytes");
+    assert_eq!(
+        std::fs::read(f.root.join("destination/outside file #🌍.txt")).unwrap(),
+        b"outside bytes"
+    );
+    assert!(f.w.documents.contains_key(&id));
+    assert_eq!(
+        std::fs::read(f.root.join("destination/opened")).unwrap(),
+        b"open bytes"
+    );
+    assert!(!std::fs::read_dir(&f.storage.root).unwrap().any(|p| {
+        p.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".workspace-copy-")
+    }));
+}
+#[cfg(unix)]
+#[test]
+fn pasted_large_files_and_folder_links_preserve_metadata_without_following_links() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+    let mut f = Fixture::new();
+    let outside = f._tmp.path().join("source tree");
+    std::fs::create_dir(&outside).unwrap();
+    let path = outside.join("large.bin");
+    let original = std::fs::File::create(&path).unwrap();
+    original.set_len(24 * 1024 * 1024).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o751)).unwrap();
+    xattr::set(&path, "user.copy-test", b"retained metadata").unwrap();
+    #[cfg(target_os = "macos")]
+    {
+        xattr::set(&path, "com.apple.ResourceFork", b"retained resource fork").unwrap();
+        assert!(
+            Command::new("/bin/chmod")
+                .args(["+a", "everyone allow read"])
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let inode = original.metadata().unwrap().ino();
+    let target = f._tmp.path().join("link target");
+    std::fs::write(&target, b"not traversed").unwrap();
+    symlink(&target, outside.join("link")).unwrap();
+    let (entries, errors) = copy_result(&mut f, &[outside.clone(), path.clone()], None);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(entries.len(), 1);
+    let copied = f.root.join("source tree/large.bin");
+    let metadata = std::fs::metadata(&copied).unwrap();
+    assert_eq!(metadata.len(), 24 * 1024 * 1024);
+    assert_eq!(metadata.mode() & 0o777, 0o751);
+    assert_ne!(metadata.ino(), inode);
+    assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+    assert_eq!(
+        xattr::get(&copied, "user.copy-test").unwrap(),
+        Some(b"retained metadata".to_vec())
+    );
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        xattr::get(&copied, "com.apple.ResourceFork").unwrap(),
+        Some(b"retained resource fork".to_vec())
+    );
+    assert!(
+        std::fs::symlink_metadata(f.root.join("source tree/link"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_link(f.root.join("source tree/link")).unwrap(),
+        target
+    );
+    #[cfg(target_os = "macos")]
+    {
+        let acl = |path: &Path| {
+            let output = Command::new("/bin/ls")
+                .arg("-le")
+                .arg(path)
+                .output()
+                .unwrap();
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .skip(1)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(acl(&copied), acl(&path));
+        for name in xattr::list(&path).unwrap() {
+            assert_eq!(
+                xattr::get(&copied, &name).unwrap(),
+                xattr::get(&path, &name).unwrap()
+            );
+        }
+    }
+    let link = f.w.register("source tree/link".into());
+    assert_eq!(
+        f.w.clipboard_paths(&[link.clone()]).unwrap(),
+        vec![Path::new(&f.w.project.root).join("source tree/link")]
+    );
+    assert!(f.w.drag_paths(&[link]).is_err());
+    assert_eq!(std::fs::read(target).unwrap(), b"not traversed");
+}
+#[test]
+fn paste_refuses_unsafe_paths_stale_sources_changed_destinations_and_revoked_trust() {
+    let mut f = Fixture::new();
+    f.write("source", "source");
+    std::fs::create_dir(f.root.join("destination")).unwrap();
+    let source = f.root.join("source");
+    let destination = f.w.register("destination".into());
+    let job =
+        f.w.prepare_file_copy(&[source.clone()], Some(&destination), &f.storage.root)
+            .unwrap();
+    f.write("source", "new source bytes");
+    let Response::FileDrop { entries, errors } =
+        job.execute(|job, stage| job.publish(&mut f.w, stage))
+    else {
+        panic!()
+    };
+    assert!(entries.is_empty());
+    assert!(!errors.is_empty());
+    assert!(!f.root.join("destination/source").exists());
+    let job =
+        f.w.prepare_file_copy(&[source.clone()], Some(&destination), &f.storage.root)
+            .unwrap();
+    std::fs::rename(f.root.join("destination"), f.root.join("old destination")).unwrap();
+    std::fs::create_dir(f.root.join("destination")).unwrap();
+    let Response::FileDrop { entries, errors } =
+        job.execute(|job, stage| job.publish(&mut f.w, stage))
+    else {
+        panic!()
+    };
+    assert!(entries.is_empty());
+    assert!(!errors.is_empty());
+    let job =
+        f.w.prepare_file_copy(&[source], None, &f.storage.root)
+            .unwrap();
+    f.w.project.trusted = false;
+    let Response::FileDrop { entries, errors } =
+        job.execute(|job, stage| job.publish(&mut f.w, stage))
+    else {
+        panic!()
+    };
+    assert!(entries.is_empty());
+    assert!(!errors.is_empty());
+    assert!(!f.root.join("source copy").exists());
+    f.w.project.trusted = true;
+    assert!(
+        f.w.prepare_file_copy(&[f.root.join(".git/config")], None, &f.storage.root)
+            .is_err()
+    );
+    assert!(
+        f.w.prepare_file_copy(&[f.root.clone()], None, &f.storage.root)
+            .is_err()
+    );
+    let destination = f.root.join("destination");
+    let id = f.w.register("destination".into());
+    assert!(
+        f.w.prepare_file_copy(&[destination], Some(&id), &f.storage.root)
+            .is_err()
+    );
+    assert!(!std::fs::read_dir(&f.storage.root).unwrap().any(|p| {
+        p.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".workspace-copy-")
+    }));
+}
+#[test]
+fn paste_keeps_successful_items_and_reports_a_later_failure_without_replay() {
+    let mut f = Fixture::new();
+    let first = f._tmp.path().join("first");
+    let second = f._tmp.path().join("second");
+    std::fs::write(&first, b"first").unwrap();
+    std::fs::write(&second, b"second").unwrap();
+    let job =
+        f.w.prepare_file_copy(&[first.clone(), second.clone()], None, &f.storage.root)
+            .unwrap();
+    let mut calls = 0;
+    let Response::FileDrop { entries, errors } = job.execute(|job, stage| {
+        calls += 1;
+        if calls == 2 {
+            return Err(agent_workspace::error::AppError::new(
+                "permissionDenied",
+                "Test destination refused the second publication",
+            ));
+        }
+        // A competing writer can occupy the proposed name before publication.
+        f.write("first", "other writer");
+        job.publish(&mut f.w, stage)
+    }) else {
+        panic!()
+    };
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "first copy");
+    assert_eq!(calls, 2);
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].contains("1 item(s) copied"));
+    assert_eq!(
+        std::fs::read(f.root.join("first")).unwrap(),
+        b"other writer"
+    );
+    assert_eq!(std::fs::read(f.root.join("first copy")).unwrap(), b"first");
+    assert!(!f.root.join("second").exists());
+    assert_eq!(std::fs::read(first).unwrap(), b"first");
+    assert_eq!(std::fs::read(second).unwrap(), b"second");
+}

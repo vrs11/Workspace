@@ -350,7 +350,10 @@
       "version": "2.1.1",
       "archiveSha256": "7e90b4a25ace5ce0561534b073943594cbcd21af936e64d09aec444568411f8c",
       "modifiedFiles": [
-        "Cargo.toml"
+        "Cargo.toml",
+        "src/lib.rs",
+        "src/platform_impl/gtk/mod.rs",
+        "src/platform_impl/windows/mod.rs"
       ],
       "addedFiles": [],
       "removedFiles": [],
@@ -362,12 +365,12 @@
         "CHANGELOG.md": "8a9e588e9475b029eb3d33dc1fae200c0c439d4fe915bbbfb75c070218c715c5",
         "LICENSE_APACHE-2.0": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
         "LICENSE_MIT": "9e17784d32fbb3ac50c6c543c307d0fbcb16969585cb4cee8839b50e774708f9",
-        "src/lib.rs": "089ba1fe2d72c3ba11502fd7076391cb22462e2d5617173c33f9bc11fe3978ca",
-        "src/platform_impl/gtk/mod.rs": "1c3ddfbbef6fcc5c06471d3a3499db5b687328a4de47ae375adb49a38ff95471",
+        "src/lib.rs": "e0b66ddd7397fb01cdfb33852d4abe6176808398df5a70c00a86b05ab14032f4",
+        "src/platform_impl/gtk/mod.rs": "7e6aad0eb8c4c038fd55761ad8946aa1a82631c8ce2ea6b9f29b7adccc14ea31",
         "src/platform_impl/macos/mod.rs": "b2397bbdc683a3fe54834013d0fbb65d92a94ee7aa59d0c881cad9fcb9ac93c7",
         "src/platform_impl/mod.rs": "9d90797e14d463fde7c023ad8cb8135ee074208eba4fd799130c7b9be117525d",
         "src/platform_impl/windows/image.rs": "a03889ded292a0be51482682a1db31edec9c417d7fdb7587369e958a843292da",
-        "src/platform_impl/windows/mod.rs": "ab3c7784daddacf50bc9fbc094afd47cc4b12c0f17aba5dbfeab47a4f88b8bfa"
+        "src/platform_impl/windows/mod.rs": "4b311f80a9a9fed5d510a9ba999bf0601716e06aabb2a366ebf6bb08316f3887"
       }
     }
   ]

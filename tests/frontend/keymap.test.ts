@@ -178,3 +178,57 @@ it.each(["MacIntel", "Linux x86_64"])(
     }
   },
 );
+
+it("routes file clipboard keys only in Explorer rows and diff navigation only in comparisons", () => {
+  document.body.innerHTML =
+    '<section class="explorer"><div id="tree" tabindex="0"></div><input></section><div class="diff-content"><div class="monaco-editor" tabindex="0"></div><div class="find-widget"><input id="diff-find"></div></div><div id="ordinary" class="monaco-editor" tabindex="0"></div>';
+  const commands: string[] = [];
+  const receive = (event: Event) => {
+    event.preventDefault();
+    commands.push((event as CustomEvent<string>).detail);
+  };
+  window.addEventListener("workspace-command", receive);
+  const stop = installShortcutRouter();
+  const key = (target: Element, code: string, modifiers: KeyboardEventInit) => {
+    const event = new KeyboardEvent("keydown", {
+      code,
+      key: code,
+      bubbles: true,
+      cancelable: true,
+      ...modifiers,
+    });
+    target.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  const modifier = /Mac/.test(navigator.platform)
+    ? { metaKey: true }
+    : { ctrlKey: true };
+  expect(key(document.querySelector("#tree")!, "KeyC", modifier)).toBe(true);
+  expect(key(document.querySelector("#tree")!, "KeyV", modifier)).toBe(true);
+  expect(key(document.querySelector("input")!, "KeyC", modifier)).toBe(false);
+  expect(key(document.querySelector("input")!, "KeyV", modifier)).toBe(false);
+  expect(
+    key(document.querySelector(".diff-content .monaco-editor")!, "ArrowDown", {
+      altKey: true,
+    }),
+  ).toBe(true);
+  expect(
+    key(document.querySelector(".diff-content .monaco-editor")!, "ArrowUp", {
+      altKey: true,
+    }),
+  ).toBe(true);
+  expect(
+    key(document.querySelector("#ordinary")!, "ArrowDown", { altKey: true }),
+  ).toBe(false);
+  expect(
+    key(document.querySelector("#diff-find")!, "ArrowUp", { altKey: true }),
+  ).toBe(false);
+  expect(commands).toEqual([
+    "explorer.copy",
+    "explorer.paste",
+    "diff.nextChange",
+    "diff.previousChange",
+  ]);
+  stop();
+  window.removeEventListener("workspace-command", receive);
+});

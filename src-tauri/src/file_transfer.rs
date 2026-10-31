@@ -158,7 +158,7 @@ pub async fn start_drag(
                         let _ = emitter.emit("workspace-native-file-end", ());
                     },
                     drag::Options {
-                        mode: drag::DragMode::Move,
+                        mode: drag::DragMode::CopyOrMove,
                         ..Default::default()
                     },
                 )

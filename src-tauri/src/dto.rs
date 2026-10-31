@@ -374,6 +374,14 @@ pub enum Request {
         scope: String,
         offer: String,
     },
+    CopyFiles {
+        scope: String,
+        entries: Vec<String>,
+    },
+    PasteFiles {
+        scope: String,
+        parent: Option<String>,
+    },
     StartFileDrag {
         scope: String,
         entries: Vec<String>,
@@ -653,6 +661,7 @@ pub enum Request {
         layout: TerminalLayout,
     },
     FinishClose,
+    ClipboardHasFiles,
     ClipboardRead,
     ClipboardWrite {
         text: String,
@@ -668,6 +677,9 @@ pub enum Request {
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Response {
+    ClipboardFiles {
+        available: bool,
+    },
     DeleteReview {
         entry: String,
         review: String,

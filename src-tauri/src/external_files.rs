@@ -195,6 +195,12 @@ impl Workspace {
         Ok(Response::FileDrop { entries, errors })
     }
     pub fn drag_paths(&self, ids: &[String]) -> Result<Vec<PathBuf>> {
+        self.export_paths(ids, false)
+    }
+    pub fn clipboard_paths(&self, ids: &[String]) -> Result<Vec<PathBuf>> {
+        self.export_paths(ids, true)
+    }
+    fn export_paths(&self, ids: &[String], links: bool) -> Result<Vec<PathBuf>> {
         self.authorize(&self.project.id, false, false)?;
         if ids.is_empty() || ids.len() > 100 {
             return Err(AppError::limit());
@@ -204,7 +210,10 @@ impl Workspace {
                 let path = self.document_path(id)?;
                 let (parent, leaf) = self.document_parent(id)?;
                 let metadata = parent.symlink_metadata(&leaf)?;
-                if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+                if !(metadata.is_file()
+                    || metadata.is_dir()
+                    || (links && metadata.file_type().is_symlink()))
+                {
                     return Err(AppError::new(
                         "unsupported",
                         "Only ordinary files and folders can be dragged.",

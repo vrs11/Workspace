@@ -6,6 +6,8 @@ pub mod documents;
 pub mod dto;
 pub mod error;
 pub mod external_files;
+pub mod file_clipboard;
+pub mod file_copy;
 pub mod file_paths;
 pub mod file_transfer;
 pub mod files;
@@ -705,7 +707,9 @@ impl Host {
             } => self
                 .project(&scope, false, false)?
                 .finish_reconcile(&refresh, accept),
-            Request::StartFileDrag { .. }
+            Request::CopyFiles { .. }
+            | Request::PasteFiles { .. }
+            | Request::StartFileDrag { .. }
             | Request::OpenDroppedFiles { .. }
             | Request::MoveDroppedFiles { .. }
             | Request::InspectDroppedMove { .. } => Err(AppError::new(
@@ -1082,6 +1086,7 @@ impl Host {
             | Request::TerminalResize { .. }
             | Request::TerminalClose { .. }
             | Request::FinishClose
+            | Request::ClipboardHasFiles
             | Request::ClipboardRead
             | Request::ClipboardWrite { .. } => Err(AppError::new(
                 "internal",
@@ -1450,6 +1455,7 @@ async fn dispatch(window: tauri::WebviewWindow, request: Request) -> Result<Resp
                 | Request::TerminalRead { .. }
                 | Request::TerminalResize { .. }
                 | Request::TerminalClose { .. }
+                | Request::ClipboardHasFiles
                 | Request::ClipboardRead
                 | Request::ClipboardWrite { .. }
                 | Request::CancelClose
@@ -1540,6 +1546,51 @@ async fn dispatch(window: tauri::WebviewWindow, request: Request) -> Result<Resp
             .await
             .map_err(|_| AppError::new("internal", "File move failed"))?
         }
+        Request::CopyFiles { scope, entries } => {
+            let host = state.host.clone();
+            let paths = tauri::async_runtime::spawn_blocking(move || {
+                host.lock()
+                    .map_err(|_| AppError::new("internal", "Workspace unavailable"))?
+                    .project(&scope, false, false)?
+                    .clipboard_paths(&entries)
+            })
+            .await
+            .map_err(|_| AppError::new("internal", "File copy worker failed"))??;
+            file_clipboard::write(window.app_handle().clone(), paths).await?;
+            Ok(Response::Ok)
+        }
+        Request::PasteFiles { scope, parent } => {
+            state
+                .host
+                .lock()
+                .map_err(|_| AppError::new("internal", "Workspace unavailable"))?
+                .project(&scope, true, true)?;
+            // Read only in response to the user's explicit Paste. Absolute paths
+            // originate in the OS clipboard, never in a renderer request.
+            let paths = file_clipboard::read(window.app_handle().clone()).await?;
+            let host = state.host.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let job = {
+                    let mut current = host
+                        .lock()
+                        .map_err(|_| AppError::new("internal", "Workspace unavailable"))?;
+                    let storage = current.storage.root.clone();
+                    current.project(&scope, true, true)?.prepare_file_copy(
+                        &paths,
+                        parent.as_deref(),
+                        &storage,
+                    )?
+                };
+                Ok(job.execute(|job, stage| {
+                    let mut current = host
+                        .lock()
+                        .map_err(|_| AppError::new("internal", "Workspace unavailable"))?;
+                    job.publish(current.project(&scope, true, true)?, stage)
+                }))
+            })
+            .await
+            .map_err(|_| AppError::new("internal", "Pasting files failed"))?
+        }
         Request::StartFileDrag { scope, entries } => {
             file_transfer::start_drag(window, scope, entries).await
         }
@@ -1611,6 +1662,9 @@ async fn dispatch(window: tauri::WebviewWindow, request: Request) -> Result<Resp
             }
             Ok(Response::Ok)
         }
+        Request::ClipboardHasFiles => Ok(Response::ClipboardFiles {
+            available: file_clipboard::has_files(window.app_handle().clone()).await?,
+        }),
         Request::ClipboardRead => {
             use tauri_plugin_clipboard_manager::ClipboardExt;
             let text = window.app_handle().clipboard().read_text().map_err(|_| {
@@ -1984,9 +2038,6 @@ pub fn run() {
         .manage(windows::PendingWindows::default())
         .register_asynchronous_uri_scheme_protocol("workspace-media", media::protocol)
         .on_webview_event(file_transfer::webview_event)
-        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-            windows::launch(app, launch::folder_argument(&args, Path::new(&cwd)));
-        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build());

@@ -8,6 +8,9 @@ import { loadDocument } from "./models";
 import { saveBeforeAction } from "./autosave";
 import { installEditorInteractions } from "./interactions";
 import { rememberEditorFile } from "../../shared/fileTargets";
+import { ArrowUp, ArrowDown } from "lucide-react";
+import { shortcutLabel } from "../../shared/keymap";
+import type { editor } from "monaco-editor";
 export default function DiffEditor({
   diff,
   staged,
@@ -18,10 +21,13 @@ export default function DiffEditor({
   const ref = useRef<HTMLDivElement>(null);
   const [inline, setInline] = useState(false);
   const [ready, setReady] = useState(false);
+  const [hasChanges, setHasChanges] = useState(false);
+  const comparison = useRef<editor.IStandaloneDiffEditor | null>(null);
   const [failure, setFailure] = useState("");
   const theme = useApp((s) => s.settings?.theme);
   useEffect(() => {
     setReady(false);
+    setHasChanges(false);
     setFailure("");
     let gone = false;
     let dispose: (() => void) | undefined;
@@ -49,6 +55,7 @@ export default function DiffEditor({
           fixedOverflowWidgets: true,
           useShadowDOM: false,
         });
+        comparison.current = editor;
         const originalInteractions = installEditorInteractions(
           editor.getOriginalEditor(),
           monaco,
@@ -62,6 +69,7 @@ export default function DiffEditor({
             editor.getOriginalEditor().render(true);
             editor.getModifiedEditor().render(true);
             setReady(true);
+            setHasChanges(!!editor.getLineChanges()?.length);
           }
         });
         dispose = () => {
@@ -69,6 +77,7 @@ export default function DiffEditor({
           originalInteractions();
           modifiedInteractions();
           editor.dispose();
+          if (comparison.current === editor) comparison.current = null;
           original.dispose();
           modified.dispose();
         };
@@ -93,12 +102,47 @@ export default function DiffEditor({
       dispose?.();
     };
   }, [diff, inline, theme]);
+  const navigate = (direction: "next" | "previous") => {
+    comparison.current?.goToDiff(direction);
+    comparison.current?.getModifiedEditor().focus();
+  };
+  useEffect(() => {
+    const command = (event: Event) => {
+      if (
+        !ref.current?.closest(".diff-content")?.contains(document.activeElement)
+      )
+        return;
+      const id = (event as CustomEvent<string>).detail;
+      if (id !== "diff.nextChange" && id !== "diff.previousChange") return;
+      event.preventDefault();
+      if (ready && hasChanges)
+        navigate(id === "diff.nextChange" ? "next" : "previous");
+    };
+    window.addEventListener("workspace-command", command);
+    return () => window.removeEventListener("workspace-command", command);
+  }, [ready, hasChanges]);
   return (
     <div className="diff-content">
       <div className="toolbar">
         <strong>
           {diff.baseLabel} ↔ {diff.nextLabel}
         </strong>
+        <button
+          aria-label="Previous change"
+          title={`Previous change (${shortcutLabel("diff.previousChange")})`}
+          disabled={!ready || !hasChanges || !!failure}
+          onClick={() => navigate("previous")}
+        >
+          <ArrowUp size={15} />
+        </button>
+        <button
+          aria-label="Next change"
+          title={`Next change (${shortcutLabel("diff.nextChange")})`}
+          disabled={!ready || !hasChanges || !!failure}
+          onClick={() => navigate("next")}
+        >
+          <ArrowDown size={15} />
+        </button>
         <button onClick={() => setInline(!inline)}>
           {inline ? "Side by side" : "Inline"}
         </button>

@@ -16,3 +16,42 @@
  version = "0.3"
  features = [
      "std",
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -141,6 +141,8 @@
+     #[default]
+     Copy = 1, // NSDragOperationCopy
+     Move = 16, // NSDragOperationMove
++    /// Negotiate a move with file managers or a copy with upload/read-only targets.
++    CopyOrMove = 17,
+ }
+ 
+ #[cfg(target_os = "macos")]
+@@ -149,6 +151,7 @@
+         match value {
+             DragMode::Copy => objc2_app_kit::NSDragOperation::Copy,
+             DragMode::Move => objc2_app_kit::NSDragOperation::Move,
++            DragMode::CopyOrMove => objc2_app_kit::NSDragOperation::Copy | objc2_app_kit::NSDragOperation::Move,
+         }
+     }
+ }
+--- a/src/platform_impl/gtk/mod.rs
++++ b/src/platform_impl/gtk/mod.rs
+@@ -30,6 +30,7 @@
+     let drag_action = match options.mode {
+         DragMode::Copy => gdk::DragAction::COPY,
+         DragMode::Move => gdk::DragAction::MOVE,
++        DragMode::CopyOrMove => gdk::DragAction::COPY | gdk::DragAction::MOVE,
+     };
+ 
+     log::debug!("Setting drag source with action: {:?}", drag_action);
+--- a/src/platform_impl/windows/mod.rs
++++ b/src/platform_impl/windows/mod.rs
+@@ -251,6 +251,7 @@
+                     let effect = match options.mode {
+                         DragMode::Copy => DROPEFFECT_COPY,
+                         DragMode::Move => DROPEFFECT_MOVE,
++                        DragMode::CopyOrMove => DROPEFFECT_COPY | DROPEFFECT_MOVE,
+                     };
+ 
+                     let drop_result =
