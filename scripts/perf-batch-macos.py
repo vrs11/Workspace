@@ -77,24 +77,42 @@ def git_fixture(project, remote=None):
         git('push', '--set-upstream', 'origin', 'main')
 
 
-def prepare(candidate_manifest=None):
+def verify_source_snapshot(path):
+    snapshot = json.loads(path.read_text())
+    expected = snapshot['hashes']
+    paths = {p for p in subprocess.check_output(
+        ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z']).decode().split('\0')
+        if p and (ROOT / p).is_file()}
+    if paths != set(expected) or any(digest(ROOT / p) != value for p, value in expected.items()):
+        raise RuntimeError('Source inputs differ from the recorded build snapshot; rebuild before preparing')
+
+
+def prepare(candidate_manifest=None, current_manifest=None):
     preflight()
     sys.path.insert(0, str(ROOT / 'tests/performance'))
     from macos_fixture_ui import ax
     if not ax.AXIsProcessTrusted():
         raise RuntimeError('Existing Accessibility permission is unavailable; no foreground run prepared')
     candidate = json.loads(candidate_manifest.read_text()) if candidate_manifest else None
-    build = json.loads((ROOT / 'artifacts/evidence/build.json').read_text())
-    source = candidate['applicationSource'] if candidate else build['applicationSourceCommit']
-    if subprocess.check_output(['git', 'diff', source, '--', 'src', 'src-tauri']):
-        raise RuntimeError('Production source differs from the frozen build; rebuild before preparing')
-    reference = json.loads((ROOT / 'artifacts/evidence/validation.json').read_text())
-    ordinary_hash = (candidate['ordinaryBinarySha256'] if candidate else
-                     build.get('ordinaryReference', {}).get('executableSha256', reference['nativeQuit']['binarySha256']))
+    current = json.loads(current_manifest.read_text()) if current_manifest else None
+    if current:
+        verify_source_snapshot(ROOT / current['sourceSnapshot'])
+        source = current['applicationSource']
+        ordinary_hash = current['ordinaryBinarySha256']
+        driver_hash = current['driverBinarySha256']
+    else:
+        build = json.loads((ROOT / 'artifacts/evidence/build.json').read_text())
+        source = candidate['applicationSource'] if candidate else build['applicationSourceCommit']
+        if subprocess.check_output(['git', 'diff', source, '--', 'src', 'src-tauri']):
+            raise RuntimeError('Production source differs from the frozen build; rebuild before preparing')
+        reference = json.loads((ROOT / 'artifacts/evidence/validation.json').read_text())
+        ordinary_hash = (candidate['ordinaryBinarySha256'] if candidate else
+                         build.get('ordinaryReference', {}).get('executableSha256', reference['nativeQuit']['binarySha256']))
+        perf = json.loads((ROOT / 'artifacts/evidence/performance-ui.json').read_text())
+        driver_hash = candidate['driverBinarySha256'] if candidate else perf['binarySha256']
     if digest(executable(ORDINARY)) != ordinary_hash:
         raise RuntimeError('Ordinary reference does not match its recorded build')
-    perf = json.loads((ROOT / 'artifacts/evidence/performance-ui.json').read_text())
-    if digest(executable(DRIVER)) != (candidate['driverBinarySha256'] if candidate else perf['binarySha256']):
+    if digest(executable(DRIVER)) != driver_hash:
         raise RuntimeError('Optimized driver does not match validated source')
     run = ROOT / 'artifacts/performance-batches' / datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
     run.mkdir(parents=True)
@@ -161,7 +179,7 @@ def prepare(candidate_manifest=None):
         'recent': [{'id': 'fixture-untrusted', 'root': str(project),
                     'name': 'GUI fixture 🌍', 'trusted': False}]}))
     prepared_environments = {}
-    if candidate:
+    if candidate or current:
         for name in ['workflow', 'stability']:
             fixture = run / name
             folder = fixture / 'GUI fixture 🌍'
@@ -207,6 +225,20 @@ def prepare(candidate_manifest=None):
         manifest.update(expectedMinutes='7–9', baselineBinarySha256=digest(executable(BASELINE)),
                         baselineSource=baseline_source,
                         method='One serial A/B resource comparison, unchanged 7-case GUI workflow, 100-cycle stability and combined-load latency. No startup rerun, runtime controls, builds or debugging during the window; original assertions/deadlines retained.')
+    if current:
+        manifest.update(sourceSnapshot=current['sourceSnapshot'],
+                        sourceSnapshotSha256=digest(ROOT / current['sourceSnapshot']),
+                        windowSeconds=600, expectedMinutes='7–9')
+        if current.get('priorStartupReport'):
+            previous = ROOT / current['priorStartupReport']
+            measured = json.loads(previous.read_text())
+            if (measured['binarySha256'] != ordinary_hash or
+                    measured['summary']['launches'] != 20 or
+                    not measured['summary']['foregroundEligible']):
+                raise RuntimeError('Prior startup result does not certify this exact welcome binary')
+            manifest.update(priorStartupReport=current['priorStartupReport'],
+                            windowSeconds=480, expectedMinutes='4–6')
+            manifest['preparedInputs'][str(previous)] = digest(previous)
     (run / 'prepared.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(str(run), flush=True)
 
@@ -219,6 +251,11 @@ def run_batch(path):
     if (run / 'result.json').exists():
         raise RuntimeError('Prepared batch already used; prepare fresh fixtures before arranging another window')
     m = json.loads((run / 'prepared.json').read_text())
+    if m.get('sourceSnapshot'):
+        snapshot = ROOT / m['sourceSnapshot']
+        if digest(snapshot) != m['sourceSnapshotSha256']:
+            raise RuntimeError('The source snapshot changed after preparation')
+        verify_source_snapshot(snapshot)
     for p, expected in [(executable(ORDINARY), m['ordinaryBinarySha256']),
                         (executable(DRIVER), m['driverBinarySha256']),
                         (HELPER, m['helperSha256']),
@@ -244,7 +281,7 @@ def run_batch(path):
     steps = [
         ('ordinary-editor-terminal', ['python3', m['controllers']['editor-terminal']], {}, None),
         ('ordinary-editor', ['python3', m['controllers']['editor']], {}, None),
-        ('stability', ['pnpm', 'test:desktop:stability'], {}, 'artifacts/evidence/desktop/stability.json'),
+        ('stability', ['pnpm', 'test:desktop:stability'], m.get('preparedEnvironments', {}).get('stability', {}), 'artifacts/evidence/desktop/stability.json'),
         ('combined-load', ['pnpm', 'test:desktop:perf'], m['combinedEnvironment'], 'artifacts/evidence/performance-ui.json'),
         ('startup', ['node', str(run / 'startup.mjs'), str(ORDINARY)], {}, 'artifacts/evidence/performance-desktop.json')]
     if m.get('optimization'):
@@ -256,6 +293,11 @@ def run_batch(path):
             ('workflow', ['pnpm', 'test:desktop'], m['preparedEnvironments']['workflow'], None),
             ('stability', ['pnpm', 'test:desktop:stability'], m['preparedEnvironments']['stability'], 'artifacts/evidence/desktop/stability.json'),
             ('combined-load', ['pnpm', 'test:desktop:perf'], m['combinedEnvironment'], 'artifacts/evidence/performance-ui.json')]
+    elif m.get('priorStartupReport'):
+        # Retry only unfinished measurements; the same binary's completed
+        # startup run is retained and checksummed in the prepared inputs.
+        steps = [step for step in steps if step[0] != 'startup']
+        report['priorStartupReport'] = m['priorStartupReport']
     child = None
     def save():
         (run / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -276,6 +318,10 @@ def run_batch(path):
             print(f'START {index}/{len(steps)} {name}', flush=True)
             env = {**os.environ, 'AW_DESKTOP_PACKAGED': '1', 'AW_REQUIRE_GPU': '1',
                    'AW_PERF_SOURCE': m['applicationSource'], **extra}
+            # A setup failure may not write a report. Preserve the prior report
+            # separately so it can never be attributed to this run.
+            if output and Path(output).exists():
+                shutil.move(output, run / (name + '-previous-report.json'))
             begin = time.monotonic()
             with (run / (name + '.txt')).open('w') as log:
                 child = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT,
@@ -347,7 +393,9 @@ if len(sys.argv) == 2 and sys.argv[1] == 'prepare':
     prepare()
 elif len(sys.argv) == 4 and sys.argv[1:3] == ['prepare', '--candidate']:
     prepare(Path(sys.argv[3]))
+elif len(sys.argv) == 4 and sys.argv[1:3] == ['prepare', '--current']:
+    prepare(current_manifest=Path(sys.argv[3]))
 elif len(sys.argv) == 3 and sys.argv[1] == 'run':
     sys.exit(run_batch(Path(sys.argv[2])))
 else:
-    raise SystemExit('Usage: source scripts/env.sh; python3 scripts/perf-batch-macos.py prepare [--candidate <build-manifest>]|run <prepared-directory>')
+    raise SystemExit('Usage: source scripts/env.sh; python3 scripts/perf-batch-macos.py prepare [--candidate|--current <build-manifest>]|run <prepared-directory>')

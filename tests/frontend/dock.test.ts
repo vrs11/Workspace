@@ -12,7 +12,6 @@ import {
   visibleDockRoot,
   restoreDock,
 } from "../../src/features/workspace/dockModel";
-import { readFileDrag } from "../../src/features/explorer/fileDrag";
 function leaves(node: DockNode | null): string[] {
   return !node
     ? []
@@ -75,19 +74,6 @@ describe("movable workspace panes", () => {
       false,
     );
   });
-});
-it("accepts only bounded file drags from the current project", () => {
-  const valid = { scope: "current", id: "opaque-entry", kind: "file" };
-  expect(readFileDrag(JSON.stringify(valid), "current")).toEqual(valid);
-  expect(readFileDrag(JSON.stringify(valid), "other-project")).toBeNull();
-  for (const value of [
-    "invalid",
-    "null",
-    "[]",
-    JSON.stringify({ ...valid, kind: "link" }),
-    "x".repeat(1025),
-  ])
-    expect(readFileDrag(value, "current")).toBeNull();
 });
 
 it("hides and reopens all panels without changing placement or ratios", () => {

@@ -42,6 +42,7 @@ function opened(entry: string): Response {
       encoding: "utf8",
       eol: "lf",
       readonly: null,
+      metadata: null,
       size: 4,
       revision: 0,
     },

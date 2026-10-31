@@ -9,7 +9,8 @@
         {
           "identifier": "desktop-test-driver",
           "windows": [
-            "main"
+            "main",
+            "workspace-*"
           ],
           "permissions": [
             "wdio:default",
@@ -17,7 +18,9 @@
             "core:webview:allow-set-webview-focus",
             "core:window:allow-show",
             "core:webview:allow-webview-show",
-            "core:window:allow-set-position"
+            "core:window:allow-set-position",
+            "core:window:allow-set-size",
+            "core:window:allow-close"
           ]
         }
       ]

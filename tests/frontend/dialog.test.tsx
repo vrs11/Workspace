@@ -55,6 +55,10 @@ it("wraps Up/Down between choices while input arrows retain caret movement and E
     });
   });
   const input = screen.getByRole("textbox") as HTMLInputElement;
+  expect(input).toHaveAttribute("autocorrect", "off");
+  expect(input).toHaveAttribute("autocapitalize", "off");
+  expect(input).toHaveAttribute("autocomplete", "off");
+  expect(input).toHaveAttribute("spellcheck", "false");
   expect(input).toHaveFocus();
   input.setSelectionRange(1, 1);
   const user = userEvent.setup();

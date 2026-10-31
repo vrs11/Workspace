@@ -68,7 +68,13 @@ describe("native editor lifetime stability", () => {
       };
     };
     const coldInventory = inventory();
-    await $('.explorer [role="treeitem"]').click();
+    await browser.execute(() => {
+      const file = document.querySelector('.tree-label[title="hello.ts"]');
+      if (!file) throw new Error("Fixture file missing");
+      file.closest('[role="treeitem"]')!.dispatchEvent(
+        new MouseEvent("dblclick", { bubbles: true, detail: 2 }),
+      );
+    });
     await $(".main-editor .monaco-editor").waitForExist();
     // Allow the normal language-service debounce/initialization before taking a
     // retained-memory baseline; a rapidly closed first model can avoid it.
@@ -191,7 +197,9 @@ describe("native editor lifetime stability", () => {
               ),
             ).find((node) => node.textContent?.trim() === "hello.ts");
             if (!file) throw new Error("Fixture file missing");
-            file.click();
+            file.dispatchEvent(
+              new MouseEvent("dblclick", { bubbles: true, detail: 2 }),
+            );
             await waitFor(
               () =>
                 !!document.querySelector('[aria-label="Close hello.ts"]') &&

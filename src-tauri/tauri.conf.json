@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "dragDropEnabled": false,
+        "dragDropEnabled": true,
         "title": "Workspace",
         "width": 1400,
         "height": 900,

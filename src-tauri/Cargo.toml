@@ -7,7 +7,7 @@ default-run = "agent-workspace"
 
 [lib]
 name = "agent_workspace"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [features]
 desktop-test = ["dep:tauri-plugin-wdio-webdriver", "dep:tauri-plugin-wdio"]
@@ -19,6 +19,7 @@ path = "../tests/fixtures/recovery-worker.rs"
 required-features = ["native-fixtures"]
 
 [dependencies]
+drag = "=2.1.1"
 tauri = { version = "=2.12.5", features = [] }
 tauri-plugin-clipboard-manager = "=2.5.0"
 tauri-plugin-dialog = { version = "=2.8.3", features = [] }
@@ -70,6 +71,9 @@ tauri = { version = "=2.12.5", default-features = false, features = ["test"] }
 debug = 0
 
 [patch.crates-io]
+drag = { path = "../vendor/drag" }
+wry = { path = "../vendor/wry" }
+tauri-runtime-wry = { path = "../vendor/tauri-runtime-wry" }
 tauri-plugin-updater = { path = "../vendor/tauri-plugin-updater" }
 portable-pty = { path = "../vendor/portable-pty" }
 glib = { path = "../vendor/glib" }

@@ -44,9 +44,10 @@ try:
  pid=int(re.search(r'startup_ready_ms=.*?pid=(\d+)',stderr.read_text())[1]);ui=FixtureUi(pid)
  wait(lambda:ui.has('Open requested folder'),'folder offer');press('Open folder')
  press('Trust folder');wait(lambda:ui.has('Trust this folder'),'trust question');press('Trust folder')
- press('Quick open Double Shift');wait(lambda:ui.has('File name'),'query')
- ui.focus('File name');ui.key(0,text='hello.ts');wait(lambda:ui.field_equals('File name','hello.ts'),'query ack');press('Search')
- wait(lambda:ui.has('hello.ts:1'),'result');ui.focus('Search results');ui.key(36)
+ # This prepared project contains one file. Use the public Explorer keyboard
+ # route, independent of Quick Open's combobox/live-result presentation.
+ wait(lambda:ui.has('Project tree'),'project tree');ui.focus('Project tree')
+ ui.key(115);ui.key(36)
  wait(lambda:ui.has('Editor content'),'editor')
  if mode=='editor-terminal':
   press('New terminal');wait(lambda:ui.has('Terminal input'),'terminal')
@@ -62,8 +63,12 @@ try:
    subprocess.run(['/usr/bin/sample',str(member['pid']),'3','-file',str(run/'webcontent-idle.sample')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True)
  ui.key(12,1<<20)
  if mode=='editor-terminal':
-  wait(lambda:ui.has('Terminate terminals and quit'),'terminal quit');press('Terminate and quit')
+  wait(lambda:ui.has('Close this window and its terminals'),'terminal quit');press('Terminate and close')
  wait(lambda:not ui.alive(),'safe quit')
+except BaseException:
+ if ui and ui.alive():
+  (run/'failure-ui.json').write_text(json.dumps({'labels':ui.describe()},indent=2)+'\n')
+ raise
 finally:
  if ui and ui.alive():
   # Only our isolated unchanged reference process, no user jobs.
@@ -71,3 +76,4 @@ finally:
  for p,content in backups.items():
   if content is None:p.unlink(missing_ok=True)
   else:p.write_bytes(content);p.chmod(0o600)
+raise SystemExit(result.returncode)

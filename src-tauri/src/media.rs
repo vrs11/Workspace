@@ -15,10 +15,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
-use tauri::{
-    Manager,
-    http::{Request, Response, StatusCode},
-};
+use tauri::http::{Request, Response, StatusCode};
 
 const CHUNK: u64 = 4 * 1024 * 1024;
 const IMAGE_LIMIT: u64 = 32 * 1024 * 1024;
@@ -59,11 +56,11 @@ fn format(name: &str) -> Option<(&'static str, &'static str)> {
 }
 impl Workspace {
     pub fn media_open(&mut self, entry: &str) -> Result<Option<Media>> {
-        let path = self.entry(entry)?;
+        let path = self.document_path(entry)?;
         let Some((kind, mime)) = format(&path.to_string_lossy()) else {
             return Ok(None);
         };
-        let (parent, leaf) = security::parent(&self.dir, &path)?;
+        let (parent, leaf) = self.document_parent(entry)?;
         let file = security::open_read(&parent, &leaf)?;
         let metadata = file.metadata()?;
         if !metadata.is_file() {
@@ -228,10 +225,12 @@ pub fn protocol(
     request: Request<Vec<u8>>,
     responder: tauri::UriSchemeResponder,
 ) {
-    if context.webview_label() != "main" || READERS.fetch_add(1, Ordering::SeqCst) >= 8 {
-        if context.webview_label() == "main" {
-            READERS.fetch_sub(1, Ordering::SeqCst);
-        }
+    let Ok(state) = crate::windows::state(context.app_handle(), context.webview_label()) else {
+        responder.respond(response(StatusCode::NOT_FOUND, vec![], "text/plain"));
+        return;
+    };
+    if READERS.fetch_add(1, Ordering::SeqCst) >= 8 {
+        READERS.fetch_sub(1, Ordering::SeqCst);
         responder.respond(response(
             StatusCode::TOO_MANY_REQUESTS,
             vec![],
@@ -239,7 +238,6 @@ pub fn protocol(
         ));
         return;
     }
-    let app = context.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
         struct Guard;
         impl Drop for Guard {
@@ -253,7 +251,6 @@ pub fn protocol(
             if scope.len() != 64 || token.len() != 36 || request.uri().query().is_some() {
                 return None;
             }
-            let state = app.state::<crate::AppState>();
             // Playback must not wait on the repository/process operation mutex.
             let context = state.terminal_context.read().ok()?;
             let project = context.0.as_ref()?;

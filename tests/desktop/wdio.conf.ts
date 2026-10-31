@@ -132,27 +132,29 @@ export const config = {
   runner: "local",
   specs: [
     resolve(
-      performanceSuite
-        ? "tests/desktop/performance.spec.ts"
-        : process.env.AW_DESKTOP_STABILITY_ONLY === "1"
-          ? "tests/desktop/stability.spec.ts"
-          : process.env.AW_DESKTOP_REPAIR_ONLY === "1"
-            ? "tests/desktop/repair.spec.ts"
-            : process.env.AW_DESKTOP_LAUNCH_ONLY === "1"
-              ? "tests/desktop/launch.spec.ts"
-              : process.env.AW_DESKTOP_INTERACTION_ONLY === "1"
-                ? "tests/desktop/interaction.spec.ts"
-                : process.env.AW_DESKTOP_DOCKING_ONLY === "1"
-                  ? "tests/desktop/docking.spec.ts"
-                  : process.env.AW_DESKTOP_EXPLORER_ONLY === "1"
-                    ? "tests/desktop/explorer.spec.ts"
-                    : process.env.AW_DESKTOP_EDITOR_ONLY === "1"
-                      ? "tests/desktop/editor.spec.ts"
-                      : process.env.AW_DESKTOP_FEATURES_ONLY === "1"
-                        ? "tests/desktop/features.spec.ts"
-                        : process.env.AW_DESKTOP_POINTER_ONLY === "1"
-                          ? "tests/desktop/pointer.spec.ts"
-                          : "tests/desktop/workflow.spec.ts",
+      process.env.AW_DESKTOP_FILES_ONLY === "1"
+        ? "tests/desktop/file-transfer.spec.ts"
+        : performanceSuite
+          ? "tests/desktop/performance.spec.ts"
+          : process.env.AW_DESKTOP_STABILITY_ONLY === "1"
+            ? "tests/desktop/stability.spec.ts"
+            : process.env.AW_DESKTOP_REPAIR_ONLY === "1"
+              ? "tests/desktop/repair.spec.ts"
+              : process.env.AW_DESKTOP_LAUNCH_ONLY === "1"
+                ? "tests/desktop/launch.spec.ts"
+                : process.env.AW_DESKTOP_INTERACTION_ONLY === "1"
+                  ? "tests/desktop/interaction.spec.ts"
+                  : process.env.AW_DESKTOP_DOCKING_ONLY === "1"
+                    ? "tests/desktop/docking.spec.ts"
+                    : process.env.AW_DESKTOP_EXPLORER_ONLY === "1"
+                      ? "tests/desktop/explorer.spec.ts"
+                      : process.env.AW_DESKTOP_EDITOR_ONLY === "1"
+                        ? "tests/desktop/editor.spec.ts"
+                        : process.env.AW_DESKTOP_FEATURES_ONLY === "1"
+                          ? "tests/desktop/features.spec.ts"
+                          : process.env.AW_DESKTOP_POINTER_ONLY === "1"
+                            ? "tests/desktop/pointer.spec.ts"
+                            : "tests/desktop/workflow.spec.ts",
     ),
   ],
   maxInstances: 1,

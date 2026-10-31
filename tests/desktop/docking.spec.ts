@@ -1,3 +1,4 @@
+import { startDrag, dropOn } from "./fileDragActions";
 import { terminalAction, gitAction, explorerAction } from "./terminalActions";
 import { $, browser, expect } from "@wdio/globals";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -29,44 +30,6 @@ async function pasteTerminal(text: string) {
       }),
     );
   }, text);
-}
-async function startDrag(selector: string) {
-  await browser.execute((selector) => {
-    const element = document.querySelector<HTMLElement>(selector)!;
-    const state = window as unknown as {
-      __drag: DataTransfer;
-      __dragSource: HTMLElement;
-    };
-    state.__drag = new DataTransfer();
-    state.__dragSource = element;
-    element.dispatchEvent(
-      new DragEvent("dragstart", {
-        dataTransfer: state.__drag,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-  }, selector);
-}
-async function dropOn(selector: string) {
-  await browser.execute((selector) => {
-    const target = document.querySelector<HTMLElement>(selector)!;
-    const state = window as unknown as {
-      __drag: DataTransfer;
-      __dragSource: HTMLElement;
-    };
-    for (const type of ["dragover", "drop"])
-      target.dispatchEvent(
-        new DragEvent(type, {
-          dataTransfer: state.__drag,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    state.__dragSource.dispatchEvent(
-      new DragEvent("dragend", { dataTransfer: state.__drag, bubbles: true }),
-    );
-  }, selector);
 }
 async function startPanelDrag(panel: string) {
   await browser.execute((panel) => {
@@ -157,7 +120,7 @@ describe("independent movable workspace panes and real file drops", () => {
           ?.getAttribute("data-dock-panel"),
       ),
     ).toBe("terminal");
-    await $('.tree-label[title="hello.ts"]').click();
+    await $('.tree-label[title="hello.ts"]').doubleClick();
     await $(".monaco-editor textarea.inputarea").waitForExist();
     await browser.execute(() => {
       const input = document.querySelector<HTMLTextAreaElement>(

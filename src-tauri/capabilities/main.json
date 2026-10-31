@@ -1,1 +1,13 @@
-{"identifier":"main","description":"Bundled main workspace only. No remote origins or generic shell/filesystem plugin.","windows":["main"],"permissions":["core:default","allow-dispatch","allow-subscribe"]}
+{
+  "identifier": "main",
+  "description": "Bundled, native-registered project windows only. No remote origins or generic shell/filesystem plugin.",
+  "windows": [
+    "main",
+    "workspace-*"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-dispatch",
+    "allow-subscribe"
+  ]
+}

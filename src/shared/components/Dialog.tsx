@@ -151,6 +151,10 @@ function QuestionDialog({ pending }: { pending: Pending }) {
                 {pending.inputLabel ?? "Value"}
                 <input
                   ref={inputRef}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  autoComplete="off"
+                  spellCheck={false}
                   data-dialog-input
                   disabled={submitting}
                   aria-invalid={failure ? true : undefined}

@@ -30,6 +30,7 @@ const inputs = [
   "patches/manifest.json",
   "scripts/license-overrides.json",
   "scripts/licenses.mjs",
+  "scripts/license-notices.mjs",
   "scripts/prepare-licenses.mjs",
 ];
 const digest = createHash("sha256").update(

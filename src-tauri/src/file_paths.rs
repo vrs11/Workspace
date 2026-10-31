@@ -59,8 +59,18 @@ impl Workspace {
         git: Option<PathBuf>,
     ) -> Result<PathRead> {
         self.authorize(&self.project.id, kind == FilePathKind::Git, false)?;
-        let path = self.entry(entry)?;
-        security::relative(&path)?;
+        let path = self.document_path(entry)?;
+        if path.is_absolute() {
+            if matches!(kind, FilePathKind::Project | FilePathKind::Git) {
+                return Err(AppError::new(
+                    "scope",
+                    "This file is outside the project. Copy its absolute path instead.",
+                ));
+            }
+            self.document_parent(entry)?;
+        } else {
+            security::relative(&path)?;
+        }
         let mut directory =
             Path::new(&self.project.root).join(path.parent().unwrap_or(Path::new("")));
         if kind == FilePathKind::Git {
@@ -85,6 +95,12 @@ impl Workspace {
     }
     /// Return only the registered root-to-item chain; never scan descendants.
     pub fn reveal_entry(&mut self, entry: &str) -> Result<Response> {
+        if self.external_files.contains_key(entry) {
+            return Err(AppError::new(
+                "scope",
+                "This file is outside the project. Explorer only shows project files.",
+            ));
+        }
         let path = self.entry(entry)?;
         let (parent, leaf) = security::parent(&self.dir, &path)?;
         let metadata = parent

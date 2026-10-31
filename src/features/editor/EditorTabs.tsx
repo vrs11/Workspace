@@ -1,9 +1,16 @@
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import { useRef, useState, type MouseEvent, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type KeyboardEvent,
+} from "react";
 import { X } from "lucide-react";
 import { TabIndicator } from "../../app/StatusBar";
 import { useApp, perform, type Tab } from "../../shared/state/store";
 import { FilePathMenuItems } from "../../shared/components/FilePathMenu";
+import { armFileDrag, startFileDrag } from "../explorer/fileDrag";
 import { tabEntry, clearEditorFileFocus } from "../../shared/fileTargets";
 import {
   closeTabGroup,
@@ -20,6 +27,8 @@ export function EditorTabs({
   active: string | null;
   onClose: (id: string) => Promise<boolean>;
 }) {
+  const cancelDrag = useRef<(() => void) | null>(null);
+  useEffect(() => () => cancelDrag.current?.(), []);
   const [context, setContext] = useState<{
     id: string;
     x: number;
@@ -61,6 +70,32 @@ export function EditorTabs({
         <div
           key={tab.id}
           className={`tab ${active === tab.id ? "active" : ""}`}
+          onPointerDown={(event) => {
+            if (!(event.target as HTMLElement).closest("[data-editor-tab]"))
+              return;
+            cancelDrag.current?.();
+            const state = useApp.getState(),
+              entry = tabEntry(tab),
+              scope = state.project?.id;
+            if (!entry || !scope) return;
+            const file = tab.kind === "media" ? tab.media : state.docs[entry];
+            const path =
+              file?.path ??
+              (tab.kind === "diff" || tab.kind === "conflict"
+                ? tab.diff.path
+                : tab.kind === "gitConflict"
+                  ? tab.conflict.path
+                  : tab.title);
+            cancelDrag.current = armFileDrag(
+              event.nativeEvent,
+              () =>
+                void perform(() =>
+                  startFileDrag(scope, [
+                    { id: entry, name: tab.title, path, kind: "file" },
+                  ]),
+                ),
+            );
+          }}
           onContextMenu={(event) => open(event, tab.id)}
           onKeyDown={(event) => {
             if (

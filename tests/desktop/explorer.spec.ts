@@ -1,3 +1,4 @@
+import { startDrag, dropOn } from "./fileDragActions";
 import { $, browser, expect } from "@wdio/globals";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -176,29 +177,8 @@ describe("clear explorer actions and actionable file errors", () => {
     await $('button[aria-label="Refresh files"]').click();
     await file("hello.ts").waitForDisplayed();
     await file("folder").waitForDisplayed();
-    await browser.execute(() => {
-      const source = document.querySelector('.tree-label[title="hello.ts"]')!;
-      const target = document.querySelector('.tree-label[title="folder"]')!;
-      const data = new DataTransfer();
-      source.dispatchEvent(
-        new DragEvent("dragstart", {
-          dataTransfer: data,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-      for (const type of ["dragover", "drop"])
-        target.dispatchEvent(
-          new DragEvent(type, {
-            dataTransfer: data,
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
-      source.dispatchEvent(
-        new DragEvent("dragend", { dataTransfer: data, bubbles: true }),
-      );
-    });
+    await startDrag('.tree-label[title="hello.ts"]');
+    await dropOn('.tree-label[title="folder"]');
     await $(".notice").waitForDisplayed();
     expect(await $(".notice").getText()).toContain("folder/hello.ts");
     expect(await $(".notice").getText()).toContain("already exists");

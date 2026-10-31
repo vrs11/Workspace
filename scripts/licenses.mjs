@@ -10,6 +10,8 @@ import {
 import { join, dirname, basename } from "node:path";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
+import { noticeTextIndex } from "./license-notices.mjs";
+const licenseTexts = noticeTextIndex();
 const npm = JSON.parse(
   execFileSync("pnpm", ["licenses", "list", "--json"], {
     encoding: "utf8",
@@ -109,7 +111,7 @@ for (const [reported, packages] of Object.entries(npm)) {
       for (const name of names) {
         const file = join(path, name);
         try {
-          notices.push("```text", readFileSync(file, "utf8"), "```", "");
+          notices.push(licenseTexts.reference(readFileSync(file, "utf8")), "");
         } catch (e) {
           problems.push(`Cannot read license ${file}: ${e.message}`);
         }
@@ -186,7 +188,7 @@ for (const p of cargo.packages) {
   )) {
     const file = join(dirname(p.manifest_path), name);
     try {
-      notices.push("```text", readFileSync(file, "utf8"), "```", "");
+      notices.push(licenseTexts.reference(readFileSync(file, "utf8")), "");
     } catch (e) {
       problems.push(`Cannot read license ${file}: ${e.message}`);
     }
@@ -242,7 +244,7 @@ writeFileSync(
 );
 writeFileSync(
   join(legalRoot, "THIRD_PARTY_NOTICES.md"),
-  notices
+  [...notices, ...licenseTexts.sections()]
     .join("\n")
     .replace(/\r\n/g, "\n")
     .replace(/[ \t]+$/gm, ""),

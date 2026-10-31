@@ -173,10 +173,35 @@ async function loadDocumentInner(
     ...(activateTicket === activation ? { active: entry } : {}),
   }));
 }
-function enqueue(h: Handle, work: () => Promise<void>) {
+function enqueue<T>(h: Handle, work: () => Promise<T>) {
   const next = h.queue.catch(() => {}).then(work);
   h.queue = next;
   return next;
+}
+export async function reviewDocumentMetadata(entry: string, review?: string) {
+  const h = models.get(entry);
+  const scope = useApp.getState().project?.id;
+  if (!h || !scope) throw new Error("The file is no longer open");
+  return enqueue(h, async () => {
+    const current = () =>
+      models.get(entry) === h &&
+      useApp.getState().project?.id === scope &&
+      !!useApp.getState().docs[entry];
+    if (!current()) throw new Error("The file is no longer open");
+    const result = await call(
+      review === undefined
+        ? { type: "reviewMetadata", scope, document: entry }
+        : { type: "allowMetadataLoss", scope, document: entry, review },
+      "documentMetadata",
+    );
+    if (!current()) throw new Error("The file is no longer open");
+    // Metadata approval must not replace Monaco text, versions, selection or undo.
+    useApp.getState().doc(entry, {
+      readonly: result.readonly,
+      metadata: result.metadata,
+    });
+    return result;
+  });
 }
 function snapshot(h: Handle) {
   return {
@@ -281,9 +306,39 @@ export async function saveDocument(entry: string, automatic = false) {
         dirty: h.model.getAlternativeVersionId() !== value.version,
         conflict: false,
         saveError: null,
+        metadata: null,
       });
       window.dispatchEvent(new Event("workspace-refresh"));
     } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "metadataChanged" &&
+        models.get(entry) === h &&
+        useApp.getState().project?.id === scope &&
+        useApp.getState().docs[entry]
+      ) {
+        try {
+          const result = await call(
+            { type: "reviewMetadata", scope, document: entry },
+            "documentMetadata",
+          );
+          if (
+            models.get(entry) === h &&
+            useApp.getState().project?.id === scope &&
+            useApp.getState().docs[entry]
+          )
+            useApp
+              .getState()
+              .doc(entry, {
+                readonly: result.readonly,
+                metadata: result.metadata,
+              });
+        } catch {
+          /* Keep the buffer and original failure if disk changed again. */
+        }
+      }
       if (
         models.get(entry) === h &&
         useApp.getState().project?.id === scope &&
@@ -466,6 +521,7 @@ async function reconcileOpenDocuments() {
           useApp.getState().doc(id, {
             baseline: d.baseline,
             readonly: d.readonly,
+            metadata: d.metadata,
             dirty: false,
             revision: h.revision,
             acknowledged: d.revision,

@@ -38,7 +38,7 @@ async function key(
   );
 }
 async function open(file: string) {
-  await $(`.tree-label[title="${file}"]`).click();
+  await $(`.tree-label[title="${file}"]`).doubleClick();
 }
 async function setBinding(id: string, value: string) {
   await $('input[aria-label="Search keyboard shortcuts"]').setValue(id);
@@ -55,8 +55,9 @@ describe("syntax, real media and configurable keymap", () => {
   it("detects common languages and extensionless technologies and renders actual syntax tokens", async () => {
     await $("h1").waitForDisplayed();
     expect(await browser.getTitle()).toBe("Workspace");
-    expect(await $(".brand").getText()).toContain("Workspace");
-    expect(await $(".brand").getText()).not.toContain("Agent");
+    expect(await $(".brand").getText()).toBe("");
+    expect(await $(".brand-mark").getAttribute("alt")).toBe("Workspace");
+    await expect($(".brand-mark")).toBeDisplayed();
     await $(".recent-projects button").click();
     await $(".trust-banner button").waitForDisplayed();
     await $(".trust-banner button").click();

@@ -1,0 +1,21 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -4783,7 +4783,18 @@
+   if webview_attributes.drag_drop_handler_enabled {
+     let proxy = context.proxy.clone();
+     let window_id_ = window_id.clone();
++    // File drops belong to the native path bridge. Text/Monaco drags keep
++    // WebKit/WebView2/GTK's normal behavior rather than being swallowed.
++    let dragging_files = std::sync::atomic::AtomicBool::new(false);
+     webview_builder = webview_builder.with_drag_drop_handler(move |event| {
++      let files = match &event {
++        WryDragDropEvent::Enter { paths, .. } => { dragging_files.store(!paths.is_empty(), std::sync::atomic::Ordering::Relaxed); !paths.is_empty() },
++        WryDragDropEvent::Drop { paths, .. } => { dragging_files.store(false, std::sync::atomic::Ordering::Relaxed); !paths.is_empty() },
++        WryDragDropEvent::Over { .. } => dragging_files.load(std::sync::atomic::Ordering::Relaxed),
++        WryDragDropEvent::Leave => { dragging_files.swap(false, std::sync::atomic::Ordering::Relaxed) },
++        _ => false,
++      };
++      if !files { return false; }
+       let event = match event {
+         WryDragDropEvent::Enter {
+           paths,

@@ -55,6 +55,7 @@ const child = spawn(
         : "0",
       AW_DESKTOP_REPAIR_ONLY: process.argv.includes("--repair") ? "1" : "0",
       AW_DESKTOP_LAUNCH_ONLY: process.argv.includes("--launch") ? "1" : "0",
+      AW_DESKTOP_FILES_ONLY: process.argv.includes("--files") ? "1" : "0",
       AW_DESKTOP_EXPLORER_ONLY: process.argv.includes("--explorer") ? "1" : "0",
       AW_DESKTOP_FEATURES_ONLY: process.argv.includes("--features") ? "1" : "0",
       AW_DESKTOP_EDITOR_ONLY: process.argv.includes("--editor") ? "1" : "0",

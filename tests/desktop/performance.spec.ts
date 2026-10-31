@@ -1,4 +1,4 @@
-import { browser, $, $$, expect } from "@wdio/globals";
+import { browser, $, expect } from "@wdio/globals";
 import {
   readdirSync,
   readFileSync,
@@ -279,7 +279,9 @@ describe("optimized native UI performance", () => {
                 ).find((node) => node.textContent?.trim() === "hello.ts");
                 if (!file) throw new Error("Actual fixture file missing");
                 const started = performance.now();
-                file.click();
+                file.dispatchEvent(
+                  new MouseEvent("dblclick", { bubbles: true, detail: 2 }),
+                );
                 await wait(
                   () =>
                     !!document
@@ -334,9 +336,13 @@ describe("optimized native UI performance", () => {
           reason:
             "Pre-change optimized editor first paint failed. This run measures settled working-session activity only.",
         };
-      const files = await $$('.explorer [role="treeitem"]');
-      for (const file of files)
-        if ((await file.getText()).trim() === "hello.ts") await file.click();
+      await browser.execute(() => {
+        const file = document.querySelector('.tree-label[title="hello.ts"]');
+        if (!file) throw new Error("Fixture file missing");
+        file.closest('[role="treeitem"]')!.dispatchEvent(
+          new MouseEvent("dblclick", { bubbles: true, detail: 2 }),
+        );
+      });
       await $(".main-editor .monaco-editor textarea.inputarea").waitForExist();
       if (activityOnly) {
         const module =

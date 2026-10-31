@@ -146,26 +146,26 @@ try:
     # A real parent-directory denial exercises the unresolved-work decision.
     project.chmod(0o500)
     quit_request()
-    wait_for(lambda: ui.has('Unsaved changes before quitting'), 'dirty quit guard')
+    wait_for(lambda: ui.has('Unsaved changes before closing this window'), 'dirty quit guard')
     quit_request()
     time.sleep(0.4)
-    assert ui.has('Unsaved changes before quitting')
+    assert ui.has('Unsaved changes before closing this window')
     press('Cancel')
     assert ui.alive() and live_shells() == shells
     report['checks'].append('dirty and repeated native quit cancel without stopping the shell')
     quit_request()
-    wait_for(lambda: ui.has('Unsaved changes before quitting'), 'second dirty quit guard')
-    press('Save all and quit')
-    wait_for(lambda: ui.has('Terminate terminals and quit'), 'owned-job quit guard')
+    wait_for(lambda: ui.has('Unsaved changes before closing this window'), 'second dirty quit guard')
+    press('Save all and close')
+    wait_for(lambda: ui.has('Close this window and its terminals'), 'owned-job quit guard')
     press('Cancel')
     assert ui.alive() and live_shells() == shells
     assert file.read_text() == 'original fixture text\n'
     report['checks'].append('terminal cancellation preserves both the unsaved buffer and the live shell')
     project.chmod(0o700)
     quit_request()
-    wait_for(lambda: ui.has('Unsaved changes before quitting'), 'confirmed dirty quit guard')
-    press('Save all and quit')
-    press('Terminate and quit')
+    wait_for(lambda: ui.has('Unsaved changes before closing this window'), 'confirmed dirty quit guard')
+    press('Save all and close')
+    press('Terminate and close')
     wait_for(lambda: not ui.alive(), 'acknowledged safe application exit')
     assert file.read_text() == canary + 'original fixture text\n'
     for pid in shells:

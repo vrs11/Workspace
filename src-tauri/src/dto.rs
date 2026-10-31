@@ -195,6 +195,13 @@ pub enum FilePathKind {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct MetadataWarning {
+    pub review: String,
+    pub items: Vec<String>,
+    pub accepted: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct Document {
     pub id: String,
     pub entry: String,
@@ -205,6 +212,8 @@ pub struct Document {
     pub encoding: String,
     pub eol: String,
     pub readonly: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<MetadataWarning>,
     pub size: f64,
     pub recovery: Option<String>,
     pub revision: u32,
@@ -302,6 +311,14 @@ pub enum StreamEvent {
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Request {
     Bootstrap,
+    NewWindow {
+        path: Option<String>,
+    },
+    FocusProjectWindow {
+        path: String,
+    },
+    CancelClose,
+    QuitApplication,
     TakeOpenRequest,
     RepairSettings {
         restore_backup: bool,
@@ -344,6 +361,23 @@ pub enum Request {
         scope: String,
         entry: String,
     },
+    InspectDroppedMove {
+        scope: String,
+        offer: String,
+    },
+    MoveDroppedFiles {
+        scope: String,
+        offer: String,
+        parent: Option<String>,
+    },
+    OpenDroppedFiles {
+        scope: String,
+        offer: String,
+    },
+    StartFileDrag {
+        scope: String,
+        entries: Vec<String>,
+    },
     OpenFile {
         scope: String,
         entry: String,
@@ -359,6 +393,15 @@ pub enum Request {
     ReconcileDocument {
         scope: String,
         document: String,
+    },
+    ReviewMetadata {
+        scope: String,
+        document: String,
+    },
+    AllowMetadataLoss {
+        scope: String,
+        document: String,
+        review: String,
     },
     FinishReconcile {
         scope: String,
@@ -416,6 +459,15 @@ pub enum Request {
     Delete {
         scope: String,
         entry: String,
+    },
+    ReviewDelete {
+        scope: String,
+        entry: String,
+    },
+    DeletePermanently {
+        scope: String,
+        entry: String,
+        review: String,
     },
     Search {
         scope: String,
@@ -616,6 +668,20 @@ pub enum Request {
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Response {
+    DeleteReview {
+        entry: String,
+        review: String,
+        path: String,
+        directory: bool,
+    },
+    WindowOpened {
+        window: Option<String>,
+        existing: bool,
+    },
+    FileDrop {
+        entries: Vec<Entry>,
+        errors: Vec<String>,
+    },
     Bootstrap {
         settings: Settings,
         project: Option<Project>,
@@ -637,6 +703,11 @@ pub enum Response {
     Reconciled {
         document: Document,
         refresh: Option<String>,
+    },
+    DocumentMetadata {
+        document: String,
+        readonly: Option<String>,
+        metadata: Option<MetadataWarning>,
     },
     Saved {
         baseline: String,
@@ -717,6 +788,7 @@ pub fn export_types() -> String {
         TerminalChunk::decl(),
         Entry::decl(),
         FilePathKind::decl(),
+        MetadataWarning::decl(),
         Document::decl(),
         Change::decl(),
         GitFileStatus::decl(),

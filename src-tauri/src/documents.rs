@@ -13,7 +13,10 @@ use cap_std::fs::OpenOptions;
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::io::Write;
-use std::{io::Read, path::Path};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 #[cfg(not(windows))]
 pub type FileMetadata = std::fs::Metadata;
@@ -32,6 +35,7 @@ impl std::ops::Deref for FileMetadata {
 
 const EDIT_LIMIT: u64 = 20 * 1024 * 1024;
 const PREVIEW_LIMIT: u64 = 64 * 1024;
+const METADATA_READONLY: &str = "This file has metadata Workspace cannot preserve when saving.";
 #[cfg(test)]
 thread_local! { static SAVE_FAULT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) }; }
 fn fault(phase: u8) -> Result<()> {
@@ -63,6 +67,8 @@ pub struct RefreshSnapshot {
 #[derive(Serialize, Deserialize)]
 pub struct Recovery {
     pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<PathBuf>,
     pub scope: String,
     pub entry: String,
     pub path: String,
@@ -210,7 +216,7 @@ fn encode(text: &str, encoding: &str) -> Vec<u8> {
 }
 impl Workspace {
     pub fn document_open(&mut self, entry: &str, storage: &Storage) -> Result<Response> {
-        let path = self.entry(entry)?;
+        let path = self.document_path(entry)?;
         match self.document_open_disk(entry, storage) {
             Ok(response) => Ok(response),
             Err(error) => {
@@ -233,6 +239,7 @@ impl Workspace {
                     baseline: recovery.baseline,
                     recovery: Some(recovery.text), revision: recovery.revision,
                     readonly: Some("Recovery preview: the original file is unavailable. Save a UTF-8 copy to a new file; the acknowledged checkpoint remains retained.".into()),
+                    metadata: None,
                 };
                 self.documents.insert(
                     entry.into(),
@@ -247,8 +254,8 @@ impl Workspace {
         }
     }
     fn document_open_disk(&mut self, entry: &str, storage: &Storage) -> Result<Response> {
-        let path = self.entry(entry)?;
-        let (parent, leaf) = security::parent(&self.dir, &path)?;
+        let path = self.document_path(entry)?;
+        let (parent, leaf) = self.document_parent(entry)?;
         let m = security::open_read(&parent, &leaf)?.metadata()?;
         if !m.is_file() || m.file_type().is_symlink() {
             return Err(AppError::new(
@@ -296,6 +303,10 @@ impl Workspace {
             }
             text.truncate(end);
         }
+        let mut metadata_warning = None;
+        if meta.permissions().readonly() && readonly.is_none() {
+            readonly = Some("File is marked read-only".into());
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -306,8 +317,13 @@ impl Workspace {
             let mut options = OpenOptions::new();
             options.read(true).follow(cap_fs_ext::FollowSymlinks::No);
             let file = parent.open_with(&leaf, &options)?.into_std();
-            if !supported_metadata(&file)? {
-                readonly = Some("Extended file metadata: replacement not supported".into());
+            // Never offer this exception for binary/bounded previews, hard links,
+            // mixed EOL or OS read-only files, even if they also have xattrs.
+            if readonly.is_none() {
+                metadata_warning = crate::document_metadata::inspect(&file)?.warning();
+                if metadata_warning.is_some() {
+                    readonly = Some(METADATA_READONLY.into());
+                }
             }
         }
         #[cfg(windows)]
@@ -324,6 +340,17 @@ impl Workspace {
         }
         let baseline = hash(&bytes);
         if let Some(current) = self.documents.get(entry) {
+            if let (Some(previous), Some(warning)) = (&current.dto.metadata, &mut metadata_warning)
+            {
+                if previous.accepted
+                    && previous.review == warning.review
+                    && current.dto.baseline == baseline
+                    && current.dto.readonly.is_none()
+                {
+                    warning.accepted = true;
+                    readonly = None;
+                }
+            }
             if current.dirty {
                 let mut dto = current.dto.clone();
                 if let Some(recovery) = storage
@@ -335,6 +362,7 @@ impl Workspace {
                 }
                 if baseline != dto.baseline {
                     dto.readonly = Some("External change conflicts with unsaved edits. Compare disk before keeping either version.".into());
+                    dto.metadata = None;
                 }
                 return Ok(Response::Document { document: dto });
             }
@@ -354,6 +382,7 @@ impl Workspace {
         {
             if r.baseline != baseline {
                 readonly=Some("External change conflicts with recovered edits. Compare all versions before saving.".into());
+                metadata_warning = None;
             }
             (r.baseline_text.clone(), r.baseline.clone())
         } else {
@@ -369,6 +398,7 @@ impl Workspace {
             encoding,
             eol,
             readonly,
+            metadata: metadata_warning,
             size: meta.len() as f64,
             recovery,
             revision,
@@ -449,7 +479,7 @@ impl Workspace {
         if text.len() as u64 > EDIT_LIMIT {
             return Err(AppError::limit());
         }
-        let path = self.entry(id)?;
+        let path = self.document_path(id)?;
         let d = self
             .documents
             .get_mut(id)
@@ -491,14 +521,23 @@ impl Workspace {
         // Keep baseline for explicit three-version reconciliation.
         let r = Recovery {
             version: 1,
+            external: self.external_files.get(id).map(|f| f.path.clone()),
             scope: self.project.id.clone(),
             entry: id.into(),
-            path: path_token(&path),
+            path: path_token(if path.is_absolute() {
+                Path::new(path.file_name().ok_or_else(AppError::limit)?)
+            } else {
+                &path
+            }),
             text: text.into(),
             baseline: d.dto.baseline.clone(),
             baseline_text: d.dto.text.clone(),
             revision,
         };
+        let _budget = storage
+            .recovery_gate
+            .lock()
+            .map_err(|_| AppError::new("internal", "Recovery storage unavailable"))?;
         storage.recovery_budget(&format!("recovery-{id}.json"), &r)?;
         storage.write(&format!("recovery-{id}.json"), &r)?;
         d.dirty = text != d.dto.text;
@@ -508,6 +547,96 @@ impl Workspace {
             baseline: d.dto.baseline.clone(),
             revision,
         })
+    }
+    /// Refresh only metadata restrictions; never replace editor text or recovery.
+    pub fn review_metadata(&mut self, id: &str) -> Result<Response> {
+        let warning = self.inspect_document_metadata(id)?;
+        let d = self.documents.get_mut(id).expect("validated document");
+        d.dto.readonly = warning.as_ref().map(|_| METADATA_READONLY.into());
+        d.dto.metadata = warning;
+        Ok(Response::DocumentMetadata {
+            document: id.into(),
+            readonly: d.dto.readonly.clone(),
+            metadata: d.dto.metadata.clone(),
+        })
+    }
+    pub fn allow_metadata_loss(&mut self, id: &str, review: &str) -> Result<Response> {
+        self.authorize(&self.project.id, true, true)?;
+        let mut warning = self.inspect_document_metadata(id)?.ok_or_else(|| {
+            AppError::new(
+                "metadataChanged",
+                "File metadata changed. Reopen the review before editing.",
+            )
+        })?;
+        if warning.review != review {
+            return Err(AppError::new(
+                "metadataChanged",
+                "File metadata changed. Cancel and review it again before editing.",
+            ));
+        }
+        warning.accepted = true;
+        let d = self.documents.get_mut(id).expect("validated document");
+        d.dto.readonly = None;
+        d.dto.metadata = Some(warning.clone());
+        Ok(Response::DocumentMetadata {
+            document: id.into(),
+            readonly: None,
+            metadata: Some(warning),
+        })
+    }
+    fn inspect_document_metadata(&self, id: &str) -> Result<Option<crate::dto::MetadataWarning>> {
+        self.authorize(&self.project.id, false, false)?;
+        let d = self
+            .documents
+            .get(id)
+            .ok_or_else(|| AppError::new("notFound", "Document is closed"))?;
+        if d.dto
+            .readonly
+            .as_ref()
+            .is_some_and(|r| r != METADATA_READONLY || d.dto.metadata.is_none())
+        {
+            return Err(AppError::new(
+                "unsupported",
+                "This read-only restriction cannot be overridden by accepting metadata loss",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let (parent, leaf) = self.document_parent(id)?;
+            let file = security::open_read(&parent, &leaf)?;
+            let before = crate::document_metadata::inspect(&file)?;
+            let m = file.metadata()?;
+            if !m.is_file() || m.nlink() != 1 || m.permissions().readonly() || m.len() > EDIT_LIMIT
+            {
+                return Err(AppError::new(
+                    "unsupported",
+                    "This file cannot be safely edited by accepting metadata loss",
+                ));
+            }
+            let mut bytes = Vec::new();
+            (&file).take(EDIT_LIMIT + 1).read_to_end(&mut bytes)?;
+            before.matches(&file)?;
+            if hash(&bytes) != d.dto.baseline {
+                return Err(AppError::conflict(
+                    "File content changed. Compare disk changes before editing.",
+                ));
+            }
+            // Defence in depth for recovered/reviewed baselines and bounded text previews.
+            let (text, _) = decode(&bytes)?;
+            if eol(&text) == "mixed" || text.lines().any(|l| l.len() > 1024 * 1024) {
+                return Err(AppError::new(
+                    "unsupported",
+                    "This text preview cannot be safely edited",
+                ));
+            }
+            Ok(before.warning())
+        }
+        #[cfg(not(unix))]
+        Err(AppError::new(
+            "unsupported",
+            "Metadata loss approval is unavailable on this platform",
+        ))
     }
     pub fn save(
         &mut self,
@@ -529,8 +658,13 @@ impl Workspace {
             return Err(AppError::conflict("Stale editor revision"));
         }
         let encoding = d.dto.encoding.clone();
-        let path = self.entry(id)?;
-        let (parent, leaf) = security::parent(&self.dir, &path)?;
+        let approval = d
+            .dto
+            .metadata
+            .as_ref()
+            .filter(|m| m.accepted)
+            .map(|m| m.review.clone());
+        let (parent, leaf) = self.document_parent(id)?;
         let (old, meta) = read_file(&parent, &leaf, EDIT_LIMIT + 1)?;
         if meta.permissions().readonly() {
             return Err(AppError::new(
@@ -545,7 +679,15 @@ impl Workspace {
         }
         self.checkpoint(id, text, revision, storage)?;
         let bytes = encode(text, &encoding);
-        atomic_replace(&parent, &leaf, &old, &bytes, &meta)?;
+        atomic_replace_reviewed(
+            &parent,
+            &leaf,
+            &old,
+            &bytes,
+            &meta,
+            approval.as_deref(),
+            fault,
+        )?;
         let d = self
             .documents
             .get_mut(id)
@@ -554,6 +696,7 @@ impl Workspace {
         d.dto.text = text.into();
         d.dto.revision = revision;
         d.dto.recovery = None;
+        d.dto.metadata = None;
         d.dirty = false;
         // Retain last durable checkpoint until successfully replaced; then remove primary and backup.
         remove_recovery(storage, id)?;
@@ -568,8 +711,8 @@ impl Workspace {
         self.document_open(id, storage)
     }
     pub fn compare(&mut self, id: &str) -> Result<Response> {
-        let path = self.entry(id)?;
-        let (parent, leaf) = security::parent(&self.dir, &path)?;
+        let path = self.document_path(id)?;
+        let (parent, leaf) = self.document_parent(id)?;
         let (bytes, _) = read_file(&parent, &leaf, EDIT_LIMIT + 1)?;
         if bytes.len() as u64 > EDIT_LIMIT {
             return Err(AppError::limit());
@@ -583,8 +726,7 @@ impl Workspace {
     }
     pub fn review_disk(&mut self, id: &str, reviewed: &str, storage: &Storage) -> Result<Response> {
         self.authorize(&self.project.id, true, true)?;
-        let path = self.entry(id)?;
-        let (parent, leaf) = security::parent(&self.dir, &path)?;
+        let (parent, leaf) = self.document_parent(id)?;
         let (bytes, _) = read_file(&parent, &leaf, EDIT_LIMIT + 1)?;
         if hash(&bytes) != reviewed {
             return Err(AppError::conflict(
@@ -658,8 +800,25 @@ pub fn atomic_replace_with_hook(
     metadata: &FileMetadata,
     hook: impl Fn(u8) -> Result<()>,
 ) -> Result<()> {
+    atomic_replace_reviewed(parent, leaf, expected, bytes, metadata, None, hook)
+}
+fn atomic_replace_reviewed(
+    parent: &Dir,
+    leaf: &Path,
+    expected: &[u8],
+    bytes: &[u8],
+    metadata: &FileMetadata,
+    approval: Option<&str>,
+    hook: impl Fn(u8) -> Result<()>,
+) -> Result<()> {
     #[cfg(windows)]
     {
+        if approval.is_some() {
+            return Err(AppError::new(
+                "unsupported",
+                "Metadata loss approval is unavailable on this platform",
+            ));
+        }
         crate::windows_fs::atomic_replace(parent, leaf, expected, bytes, &metadata.identity, hook)
     }
     #[cfg(unix)]
@@ -684,23 +843,35 @@ pub fn atomic_replace_with_hook(
             let mut opts = OpenOptions::new();
             opts.read(true).follow(cap_fs_ext::FollowSymlinks::No);
             let original = parent.open_with(leaf, &opts)?.into_std();
-            if !supported_metadata(&original)? || !supported_metadata(&f)? {
-                return Err(AppError::new(
-                    "unsupported",
-                    "Unsupported metadata appeared while saving",
-                ));
+            let reviewed = crate::document_metadata::inspect(&original)?;
+            if let Some(token) = approval {
+                if reviewed.token != token {
+                    return Err(crate::document_metadata::changed());
+                }
+                reviewed.prepare_replacement(&f)?;
+                f.set_permissions(metadata.permissions())?;
+            } else if reviewed.warning().is_some() || !supported_metadata(&f)? {
+                return Err(crate::document_metadata::changed());
             }
             for key in original.list_xattr()? {
-                if key != "com.apple.provenance" {
+                if !crate::document_metadata::can_preserve(&original, &key)? {
+                    // Only explicitly reviewed attributes may be omitted.
+                    if approval.is_some() {
+                        continue;
+                    }
+                    return Err(crate::document_metadata::changed());
+                }
+                let value = crate::document_metadata::read_preserved(&original, &key)?;
+                if !f.list_xattr()?.any(|candidate| candidate == key)
+                    || crate::document_metadata::read_preserved(&f, &key)? != value
+                {
+                    f.set_xattr(&key, &value)?;
+                }
+                if crate::document_metadata::read_preserved(&f, &key)? != value {
                     return Err(AppError::new(
                         "unsupported",
-                        "Unsupported metadata appeared while saving",
+                        "File metadata could not be preserved exactly; original retained",
                     ));
-                }
-                if let Some(value) = original.get_xattr(&key)? {
-                    if f.get_xattr(&key)?.as_ref() != Some(&value) {
-                        f.set_xattr(&key, &value)?;
-                    }
                 }
             }
             let new_meta = f.metadata()?;
@@ -723,6 +894,7 @@ pub fn atomic_replace_with_hook(
                 ));
             }
             hook(3)?;
+            reviewed.matches(&security::open_read(parent, leaf)?)?;
             parent.rename(&tmp, parent, leaf)?;
             hook(4)?;
             parent.try_clone()?.into_std_file().sync_all().map_err(|_| AppError::new("unknownOutcome", "Replacement completed but directory durability was not acknowledged; recovery retained"))?;
@@ -839,48 +1011,98 @@ mod tests {
             assert!(token_path(token).is_err());
         }
     }
+    #[cfg(unix)]
+    #[test]
+    fn approved_metadata_loss_obeys_durability_failures_and_retains_recovery() {
+        for phase in 1..=4 {
+            let t = tempfile::tempdir().unwrap();
+            let root = t.path().join("project");
+            std::fs::create_dir(&root).unwrap();
+            let path = root.join("file");
+            std::fs::write(&path, "original").unwrap();
+            xattr::set(&path, "user.workspace-test", b"metadata").unwrap();
+            let storage = Storage::new(t.path().join("data")).unwrap();
+            let mut w = Workspace::open(&root, &[]).unwrap();
+            w.project.trusted = true;
+            let id = w.register("file".into());
+            w.document_open(&id, &storage).unwrap();
+            let review = w.documents[&id]
+                .dto
+                .metadata
+                .as_ref()
+                .unwrap()
+                .review
+                .clone();
+            w.allow_metadata_loss(&id, &review).unwrap();
+            SAVE_FAULT.with(|f| f.set(phase));
+            let result = w.save(&id, "mine", 1, &hash(b"original"), &storage);
+            SAVE_FAULT.with(|f| f.set(0));
+            let error = result.unwrap_err();
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                if phase == 4 {
+                    b"mine".to_vec()
+                } else {
+                    b"original".to_vec()
+                }
+            );
+            assert_eq!(
+                xattr::get(&path, "user.workspace-test").unwrap().is_none(),
+                phase == 4
+            );
+            if phase == 4 {
+                assert_eq!(error.code, "unknownOutcome");
+            }
+            let recovery: Recovery = storage
+                .read(&format!("recovery-{id}.json"))
+                .unwrap()
+                .unwrap();
+            assert_eq!(recovery.text, "mine");
+            assert!(!std::fs::read_dir(&root).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".agent-workspace-save-")
+            }));
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn metadata_changes_during_the_final_save_phase_are_not_silently_dropped() {
+        let t = tempfile::tempdir().unwrap();
+        let path = t.path().join("file");
+        std::fs::write(&path, "original").unwrap();
+        xattr::set(&path, "user.workspace-test", b"reviewed").unwrap();
+        let parent = Dir::open_ambient_dir(t.path(), cap_std::ambient_authority()).unwrap();
+        let leaf = Path::new("file");
+        let file = security::open_read(&parent, leaf).unwrap();
+        let review = crate::document_metadata::inspect(&file).unwrap();
+        let (_, metadata) = read_file(&parent, leaf, EDIT_LIMIT + 1).unwrap();
+        let result = atomic_replace_reviewed(
+            &parent,
+            leaf,
+            b"original",
+            b"mine",
+            &metadata,
+            Some(&review.token),
+            |phase| {
+                if phase == 3 {
+                    xattr::set(&path, "user.workspace-test", b"unreviewed")?;
+                }
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err().code, "metadataChanged");
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        assert_eq!(
+            xattr::get(&path, "user.workspace-test").unwrap().unwrap(),
+            b"unreviewed"
+        );
+    }
 }
 
 #[cfg(unix)]
 pub(crate) fn supported_metadata(file: &std::fs::File) -> Result<bool> {
-    use xattr::FileExt;
-    if file.list_xattr()?.any(|key| key != "com.apple.provenance") {
-        return Ok(false);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::fd::AsRawFd;
-        unsafe extern "C" {
-            fn acl_get_fd(fd: libc::c_int) -> *mut libc::c_void;
-            fn acl_get_entry(
-                acl: *mut libc::c_void,
-                entry_id: libc::c_int,
-                entry: *mut *mut libc::c_void,
-            ) -> libc::c_int;
-            fn acl_free(obj: *mut libc::c_void) -> libc::c_int;
-        }
-        // macOS ACLs are not exposed by listxattr. Empty ACLs have no first
-        // entry (EINVAL); nonempty ACLs stay read-only rather than being lost.
-        let acl = unsafe { acl_get_fd(file.as_raw_fd()) };
-        if acl.is_null() {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ENOENT) {
-                return Ok(true);
-            }
-            return Err(error.into());
-        }
-        let mut entry = std::ptr::null_mut();
-        let status = unsafe { acl_get_entry(acl, 0, &mut entry) };
-        let error = std::io::Error::last_os_error();
-        unsafe {
-            acl_free(acl);
-        }
-        if status == 0 {
-            return Ok(false);
-        }
-        if error.raw_os_error() != Some(libc::EINVAL) {
-            return Err(error.into());
-        }
-    }
-    Ok(true)
+    Ok(crate::document_metadata::inspect(file)?.warning().is_none())
 }

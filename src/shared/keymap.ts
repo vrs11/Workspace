@@ -52,6 +52,12 @@ export function applicationShortcuts(): Shortcut[] {
       `${m}+Alt+Shift+R`,
     ]),
     definition("app.openFolder", "Open folder", "Workspace", [`${m}+O`]),
+    definition("app.newWindow", "New window", "Workspace", [
+      `${m}+Alt+Shift+N`,
+    ]),
+    definition("app.quit", "Quit Workspace", "Workspace", [
+      mac() ? "Meta+Q" : "Ctrl+Shift+Q",
+    ]),
     definition("app.quickOpen", "Quick open", "Workspace", ["Shift Shift"]),
     definition("app.commandPalette", "Command palette", "Workspace", [
       `${m}+Shift+P`,

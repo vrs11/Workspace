@@ -421,6 +421,330 @@ fn macos_acl_is_never_silently_removed_by_save() {
         .unwrap();
     assert!(output.status.success());
 }
+
+#[cfg(unix)]
+mod metadata_consent {
+    use super::*;
+    use agent_workspace::{
+        documents::{Recovery, hash},
+        dto::Document,
+    };
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    const ATTR: &str = "user.workspace-test";
+    fn open(f: &mut Fixture, name: &str) -> Document {
+        let id = f.w.register(name.into());
+        let Response::Document { document } = f.w.document_open(&id, &f.storage).unwrap() else {
+            panic!()
+        };
+        document
+    }
+    fn file(f: &Fixture, name: &str) {
+        f.write(name, "original");
+        xattr::set(f.root.join(name), ATTR, b"custom metadata").unwrap();
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macl_on_a_round_tripped_file_is_preserved_without_a_loss_warning() {
+        for other_metadata in [false, true] {
+            let mut f = Fixture::new();
+            f.write("roundtrip.txt", "original");
+            let original = f.root.join("roundtrip.txt");
+            let outside = f._tmp.path().join("outside.txt");
+            std::fs::rename(&original, &outside).unwrap();
+            // Representative OS attribute, without embedding any real account
+            // or application identifiers from a user's dragged files.
+            let mut macl = vec![0; 72];
+            macl[0] = 2;
+            macl[2..18].copy_from_slice(uuid::Uuid::from_u128(1).as_bytes());
+            xattr::set(&outside, "com.apple.macl", &macl).unwrap();
+            assert_eq!(
+                xattr::get(&outside, "com.apple.macl").unwrap().unwrap(),
+                macl
+            );
+            if other_metadata {
+                xattr::set(&outside, ATTR, b"needs consent").unwrap();
+            }
+            let job = f.w.prepare_dropped_move(&[outside.clone()], None).unwrap();
+            let result = job.execute();
+            assert!(result.error.is_none(), "{:?}", result.error);
+            f.w.finish_dropped_move(&result).unwrap();
+            drop(job);
+            assert!(!outside.exists());
+            let d = open(&mut f, "outside.txt");
+            let moved = f.root.join("outside.txt");
+            if other_metadata {
+                let warning = d.metadata.as_ref().unwrap();
+                assert_eq!(warning.items, [ATTR]);
+                f.w.allow_metadata_loss(&d.id, &warning.review).unwrap();
+            } else {
+                assert!(d.readonly.is_none());
+                assert!(d.metadata.is_none());
+            }
+            f.w.save(&d.id, "edited", 1, &d.baseline, &f.storage)
+                .unwrap();
+            assert_eq!(std::fs::read(&moved).unwrap(), b"edited");
+            assert_eq!(xattr::get(&moved, "com.apple.macl").unwrap().unwrap(), macl);
+            assert!(xattr::get(&moved, ATTR).unwrap().is_none());
+            // Subsequent saves preserve MACL without acquiring a new approval.
+            f.w.save(&d.id, "edited again", 2, &hash(b"edited"), &f.storage)
+                .unwrap();
+            assert_eq!(xattr::get(&moved, "com.apple.macl").unwrap().unwrap(), macl);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn oversized_preserved_attribute_stays_bounded_and_requires_metadata_review() {
+        let mut f = Fixture::new();
+        f.write("large-macl", "original");
+        let path = f.root.join("large-macl");
+        let bytes = vec![2; 64 * 1024 + 1];
+        xattr::set(&path, "com.apple.macl", &bytes).unwrap();
+        let d = open(&mut f, "large-macl");
+        assert!(d.readonly.is_some());
+        assert!(
+            d.metadata
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .any(|item| item.contains("com.apple.macl"))
+        );
+        assert!(
+            f.w.save(&d.id, "edited", 1, &d.baseline, &f.storage)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        assert_eq!(xattr::get(&path, "com.apple.macl").unwrap().unwrap(), bytes);
+    }
+    #[test]
+    fn approval_only_changes_editability_until_save_and_preserves_standard_permissions() {
+        let mut f = Fixture::new();
+        file(&f, "a");
+        let path = f.root.join("a");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o750)).unwrap();
+        let before = path.metadata().unwrap();
+        let d = open(&mut f, "a");
+        let warning = d.metadata.unwrap();
+        assert!(!warning.accepted);
+        assert_eq!(warning.items, [ATTR]);
+        assert!(d.readonly.is_some());
+        assert!(
+            f.w.save(&d.id, "changed", 1, &d.baseline, &f.storage)
+                .is_err()
+        );
+        f.w.review_metadata(&d.id).unwrap(); // Cancelling after review changes no bytes/attrs.
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        f.w.allow_metadata_loss(&d.id, &warning.review).unwrap();
+        assert_eq!(
+            xattr::get(&path, ATTR).unwrap().unwrap(),
+            b"custom metadata"
+        );
+        assert_eq!(path.metadata().unwrap().ino(), before.ino());
+        // A same-file clean refresh must not revoke an already reviewed approval.
+        f.w.document_open(&d.id, &f.storage).unwrap();
+        assert!(f.w.documents[&d.id].dto.metadata.as_ref().unwrap().accepted);
+        f.w.save(&d.id, "changed", 1, &d.baseline, &f.storage)
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"changed");
+        assert!(xattr::get(&path, ATTR).unwrap().is_none());
+        let after = path.metadata().unwrap();
+        assert_eq!(after.mode() & 0o7777, before.mode() & 0o7777);
+        assert_eq!((after.uid(), after.gid()), (before.uid(), before.gid()));
+        assert!(f.w.documents[&d.id].dto.metadata.is_none());
+        assert!(
+            f.storage
+                .read::<Recovery>(&format!("recovery-{}.json", d.id))
+                .unwrap()
+                .is_none()
+        );
+        f.w.save(&d.id, "next", 2, &hash(b"changed"), &f.storage)
+            .unwrap();
+    }
+    #[test]
+    fn approval_is_trusted_file_specific_and_not_persisted_with_recovery() {
+        let mut f = Fixture::new();
+        file(&f, "a");
+        file(&f, "b");
+        let a = open(&mut f, "a");
+        let b = open(&mut f, "b");
+        let token = &a.metadata.as_ref().unwrap().review;
+        assert!(f.w.allow_metadata_loss(&b.id, token).is_err());
+        assert!(f.w.allow_metadata_loss(&a.id, "invented").is_err());
+        f.w.project.trusted = false;
+        assert!(f.w.allow_metadata_loss(&a.id, token).is_err());
+        f.w.project.trusted = true;
+        f.w.allow_metadata_loss(&a.id, token).unwrap();
+        f.w.checkpoint(&a.id, "unsaved", 1, &f.storage).unwrap();
+        let mut reopened = Workspace::open(&f.root, &[]).unwrap();
+        let id = reopened.register("a".into());
+        let Response::Document { document } = reopened.document_open(&id, &f.storage).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(document.recovery.as_deref(), Some("unsaved"));
+        assert!(document.readonly.is_some());
+        assert!(!document.metadata.unwrap().accepted);
+        assert_eq!(
+            xattr::get(f.root.join("a"), ATTR).unwrap().unwrap(),
+            b"custom metadata"
+        );
+    }
+    #[test]
+    fn changed_metadata_or_replaced_file_requires_fresh_review_and_retains_checkpoint() {
+        for replace in [false, true] {
+            let mut f = Fixture::new();
+            file(&f, "a");
+            let d = open(&mut f, "a");
+            let token = d.metadata.unwrap().review;
+            f.w.allow_metadata_loss(&d.id, &token).unwrap();
+            let path = f.root.join("a");
+            if replace {
+                file(&f, "replacement");
+                std::fs::rename(f.root.join("replacement"), &path).unwrap();
+            } else {
+                xattr::set(&path, ATTR, b"new metadata value").unwrap();
+            }
+            assert!(f.w.allow_metadata_loss(&d.id, &token).is_err());
+            assert_eq!(
+                f.w.save(&d.id, "mine", 1, &d.baseline, &f.storage)
+                    .unwrap_err()
+                    .code,
+                "metadataChanged"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), b"original");
+            assert!(xattr::get(&path, ATTR).unwrap().is_some());
+            let recovery: Recovery = f
+                .storage
+                .read(&format!("recovery-{}.json", d.id))
+                .unwrap()
+                .unwrap();
+            assert_eq!(recovery.text, "mine");
+            let Response::DocumentMetadata {
+                metadata, readonly, ..
+            } = f.w.review_metadata(&d.id).unwrap()
+            else {
+                panic!()
+            };
+            assert!(readonly.is_some());
+            let fresh = metadata.unwrap();
+            assert_ne!(fresh.review, token);
+            f.w.allow_metadata_loss(&d.id, &fresh.review).unwrap();
+            f.w.save(&d.id, "mine", 1, &d.baseline, &f.storage).unwrap();
+        }
+    }
+    #[test]
+    fn metadata_consent_cannot_unlock_other_readonly_previews_or_content_conflicts() {
+        let mut f = Fixture::new();
+        for name in [
+            "binary", "mixed", "long", "big", "hard", "readonly", "changed",
+        ] {
+            file(&f, name);
+        }
+        std::fs::write(f.root.join("binary"), [0, 0xff]).unwrap();
+        std::fs::write(f.root.join("mixed"), "a\r\nb\nc").unwrap();
+        std::fs::write(f.root.join("long"), vec![b'a'; 1024 * 1024 + 1]).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(f.root.join("big"))
+            .unwrap()
+            .set_len(21 * 1024 * 1024)
+            .unwrap();
+        std::fs::hard_link(f.root.join("hard"), f.root.join("link")).unwrap();
+        std::fs::set_permissions(
+            f.root.join("readonly"),
+            std::fs::Permissions::from_mode(0o444),
+        )
+        .unwrap();
+        for name in ["binary", "mixed", "long", "big", "hard", "readonly"] {
+            let d = open(&mut f, name);
+            assert!(d.readonly.is_some(), "{name}");
+            assert!(d.metadata.is_none(), "{name}");
+            assert!(f.w.review_metadata(&d.id).is_err(), "{name}");
+            assert!(
+                f.w.allow_metadata_loss(&d.id, "invented").is_err(),
+                "{name}"
+            );
+        }
+        let d = open(&mut f, "changed");
+        f.write("changed", "external");
+        assert_eq!(
+            f.w.allow_metadata_loss(&d.id, &d.metadata.unwrap().review)
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        assert_eq!(std::fs::read(f.root.join("changed")).unwrap(), b"external");
+    }
+    #[test]
+    fn external_file_metadata_approval_uses_the_existing_scoped_save_capability() {
+        let mut f = Fixture::new();
+        let path = f._tmp.path().join("external.txt");
+        std::fs::write(&path, "original").unwrap();
+        xattr::set(&path, ATTR, b"metadata").unwrap();
+        let entry = f.w.register_dropped_file(&path).unwrap();
+        let Response::Document { document: d } = f.w.document_open(&entry.id, &f.storage).unwrap()
+        else {
+            panic!()
+        };
+        f.w.allow_metadata_loss(&entry.id, &d.metadata.unwrap().review)
+            .unwrap();
+        f.w.save(&entry.id, "edited", 1, &d.baseline, &f.storage)
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"edited");
+        assert!(xattr::get(&path, ATTR).unwrap().is_none());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_custom_and_inherited_acls_are_removed_only_with_explicit_consent() {
+        for inherited in [false, true] {
+            let mut f = Fixture::new();
+            let target = if inherited {
+                f.root.clone()
+            } else {
+                f.root.join("acl")
+            };
+            if !inherited {
+                f.write("acl", "original");
+            }
+            let rule = if inherited {
+                "everyone allow read,write,file_inherit"
+            } else {
+                "everyone allow read"
+            };
+            let status = Command::new("/bin/chmod")
+                .args(["+a", rule])
+                .arg(&target)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            if inherited {
+                f.write("acl", "original");
+            }
+            let d = open(&mut f, "acl");
+            let warning = d.metadata.unwrap();
+            assert!(warning.items.contains(&"Custom access rules (ACL)".into()));
+            f.w.allow_metadata_loss(&d.id, &warning.review).unwrap();
+            let before = Command::new("/bin/ls")
+                .args(["-le"])
+                .arg(f.root.join("acl"))
+                .output()
+                .unwrap();
+            assert!(
+                String::from_utf8_lossy(&before.stdout).contains(if inherited {
+                    "everyone inherited allow read,write"
+                } else {
+                    "everyone allow read"
+                })
+            );
+            f.w.save(&d.id, "edited", 1, &d.baseline, &f.storage)
+                .unwrap();
+            let reopened = open(&mut f, "acl");
+            assert!(reopened.readonly.is_none());
+            assert!(reopened.metadata.is_none());
+            assert_eq!(std::fs::read(f.root.join("acl")).unwrap(), b"edited");
+        }
+    }
+}
 #[test]
 fn legacy_settings_migrate_without_ai_fields_or_loss_of_unrelated_preferences() {
     let t = tempfile::tempdir().unwrap();
@@ -650,7 +974,8 @@ fn folder_delete_refuses_open_descendants_and_failed_recovery_without_touching_c
     f.w.documents.clear();
     let bad_path = f._tmp.path().join("not-a-directory");
     std::fs::write(&bad_path, "keep recovery marker").unwrap();
-    let bad_storage = Storage { root: bad_path };
+    let mut bad_storage = Storage::new(f._tmp.path().join("isolated-failing-storage")).unwrap();
+    bad_storage.root = bad_path;
     assert!(f.w.delete_entry(&folder, &bad_storage).is_err());
     assert_eq!(
         std::fs::read_to_string(f.root.join("tree/file")).unwrap(),
@@ -2418,5 +2743,539 @@ fn file_path_and_reveal_actions_do_not_follow_outside_links() {
             .read()
             .unwrap(),
         "escape"
+    );
+}
+
+#[test]
+fn dropped_external_files_use_normal_safe_saves_without_project_mutation_authority() {
+    let mut f = Fixture::new();
+    let other = f._tmp.path().join("outside");
+    std::fs::create_dir(&other).unwrap();
+    let path = other.join("space 🌍.txt");
+    std::fs::write(&path, "external\n").unwrap();
+    let entry = f.w.register_dropped_file(&path).unwrap();
+    assert!(f.w.entry(&entry.id).is_err());
+    assert!(f.w.create(Some(&entry.id), "no", false).is_err());
+    assert!(f.w.delete_entry(&entry.id, &f.storage).is_err());
+    assert!(f.w.move_entry(&entry.id, None).is_err());
+    assert!(f.w.reveal_entry(&entry.id).is_err());
+    let Response::Document { document } = f.w.document_open(&entry.id, &f.storage).unwrap() else {
+        panic!()
+    };
+    assert_eq!(document.text, "external\n");
+    assert!(document.readonly.is_none());
+    f.w.save(&entry.id, "edited\n", 1, &document.baseline, &f.storage)
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "edited\n");
+    assert!(!f.root.join("space 🌍.txt").exists());
+    let Response::Document { document } = f.w.document_open(&entry.id, &f.storage).unwrap() else {
+        panic!()
+    };
+    std::fs::write(&path, "another app\n").unwrap();
+    assert!(
+        f.w.save(&entry.id, "stale\n", 2, &document.baseline, &f.storage)
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "another app\n");
+    assert_eq!(f.w.register_dropped_file(&path).unwrap().id, entry.id);
+    assert_eq!(
+        f.w.drag_paths(&[entry.id]).unwrap(),
+        vec![path.canonicalize().unwrap()]
+    );
+}
+#[test]
+fn dropped_files_deduplicate_project_models_and_report_bad_items_individually() {
+    let mut f = Fixture::new();
+    f.write("hello.txt", "project");
+    let id = f.w.register("hello.txt".into());
+    let Response::FileDrop { entries, errors } =
+        f.w.dropped_files(&[
+            f.root.join("hello.txt"),
+            f.root.join("missing"),
+            f.root.join("hello.txt"),
+            f.root.clone(),
+        ])
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, id);
+    assert_eq!(errors.len(), 2);
+    assert!(f.w.external_files.is_empty());
+    assert!(
+        f.w.dropped_files(&vec![f.root.join("hello.txt"); 101])
+            .is_err()
+    );
+    assert!(f.w.drag_paths(&["forged-entry".into()]).is_err());
+    assert!(
+        f.w.register_dropped_file(&f.root.join(".git/config"))
+            .is_err()
+    );
+}
+#[test]
+fn external_recovery_is_private_scoped_and_survives_reopening() {
+    let mut f = Fixture::new();
+    let path = f._tmp.path().join("external.txt");
+    std::fs::write(&path, "base").unwrap();
+    let entry = f.w.register_dropped_file(&path).unwrap();
+    f.w.document_open(&entry.id, &f.storage).unwrap();
+    f.w.checkpoint(&entry.id, "unsaved edits", 1, &f.storage)
+        .unwrap();
+    let recovery: agent_workspace::documents::Recovery = f
+        .storage
+        .read(&format!("recovery-{}.json", entry.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovery.external, Some(path.canonicalize().unwrap()));
+    assert!(
+        !agent_workspace::documents::token_path(&recovery.path)
+            .unwrap()
+            .is_absolute()
+    );
+    let mut reopened = Workspace::open(&f.root, &[]).unwrap();
+    let restored = reopened.register_dropped_file(&path).unwrap();
+    let Response::Document { document } = reopened.document_open(&restored.id, &f.storage).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(document.recovery.as_deref(), Some("unsaved edits"));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "base");
+    assert!(reopened.entry(&restored.id).is_err());
+}
+#[cfg(unix)]
+#[test]
+fn external_file_handles_refuse_links_and_parent_replacement() {
+    let mut f = Fixture::new();
+    let other = f._tmp.path().join("outside");
+    std::fs::create_dir(&other).unwrap();
+    let path = other.join("file.txt");
+    std::fs::write(&path, "original").unwrap();
+    let link = f._tmp.path().join("link.txt");
+    std::os::unix::fs::symlink(&path, &link).unwrap();
+    assert!(f.w.register_dropped_file(&link).is_err());
+    let entry = f.w.register_dropped_file(&path).unwrap();
+    let Response::Document { document } = f.w.document_open(&entry.id, &f.storage).unwrap() else {
+        panic!()
+    };
+    std::fs::rename(&other, f._tmp.path().join("renamed")).unwrap();
+    std::fs::create_dir(&other).unwrap();
+    std::fs::write(&path, "replacement").unwrap();
+    assert!(
+        f.w.save(&entry.id, "wrong", 1, &document.baseline, &f.storage)
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "replacement");
+    assert_eq!(
+        std::fs::read_to_string(f._tmp.path().join("renamed/file.txt")).unwrap(),
+        "original"
+    );
+}
+#[test]
+fn missing_external_files_keep_acknowledged_recovery_readable_without_write_authority() {
+    let mut f = Fixture::new();
+    let path = f._tmp.path().join("disappeared.txt");
+    std::fs::write(&path, "base").unwrap();
+    let entry = f.w.register_dropped_file(&path).unwrap();
+    f.w.document_open(&entry.id, &f.storage).unwrap();
+    f.w.checkpoint(&entry.id, "keep this recovery", 1, &f.storage)
+        .unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let mut reopened = Workspace::open(&f.root, &[]).unwrap();
+    let recorded = f
+        .storage
+        .read::<agent_workspace::documents::Recovery>(&format!("recovery-{}.json", entry.id))
+        .unwrap()
+        .unwrap()
+        .external
+        .unwrap();
+    reopened
+        .register_external_recovery(&recorded, &entry.id)
+        .unwrap();
+    let Response::Document { document } = reopened.document_open(&entry.id, &f.storage).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(document.recovery.as_deref(), Some("keep this recovery"));
+    assert!(document.readonly.is_some());
+    assert!(reopened.drag_paths(&[entry.id.clone()]).is_err());
+    assert!(
+        reopened
+            .register_external_recovery(&path, "forged")
+            .is_err()
+    );
+    assert!(!path.exists());
+}
+#[test]
+fn incoming_os_moves_preserve_files_folders_metadata_and_remove_sources() {
+    let mut f = Fixture::new();
+    let outside = f._tmp.path().join("incoming");
+    std::fs::create_dir_all(outside.join("folder/nested/empty")).unwrap();
+    std::fs::write(outside.join("file.bin"), [0, 1, 255]).unwrap();
+    std::fs::write(outside.join("folder/nested/child.txt"), "child").unwrap();
+    let paths = vec![
+        outside.join("file.bin"),
+        outside.join("folder"),
+        outside.join("folder/nested/child.txt"),
+    ];
+    let job = f.w.prepare_dropped_move(&paths, None).unwrap();
+    assert!(f.w.authorize(&f.w.project.id, true, true).is_err());
+    let result = job.execute();
+    assert!(result.error.is_none(), "{:?}", result.error);
+    let Response::FileDrop { entries, errors } = f.w.finish_dropped_move(&result).unwrap() else {
+        panic!()
+    };
+    assert_eq!(entries.len(), 2);
+    assert!(errors.is_empty());
+    drop(job);
+    assert!(f.w.authorize(&f.w.project.id, true, true).is_ok());
+    assert!(!outside.join("file.bin").exists() && !outside.join("folder").exists());
+    assert_eq!(std::fs::read(f.root.join("file.bin")).unwrap(), [0, 1, 255]);
+    assert!(f.root.join("folder/nested/empty").is_dir());
+    assert_eq!(
+        std::fs::read_to_string(f.root.join("folder/nested/child.txt")).unwrap(),
+        "child"
+    );
+}
+#[test]
+fn incoming_move_collision_preflight_and_open_editor_guards_keep_all_sources() {
+    let mut f = Fixture::new();
+    let outside = f._tmp.path().join("incoming");
+    std::fs::create_dir(&outside).unwrap();
+    for name in ["a", "b"] {
+        std::fs::write(outside.join(name), name).unwrap();
+    }
+    f.write("b", "existing");
+    assert!(
+        f.w.prepare_dropped_move(&[outside.join("a"), outside.join("b")], None)
+            .is_err()
+    );
+    assert!(outside.join("a").exists() && outside.join("b").exists());
+    assert!(!f.root.join("a").exists());
+    let entry = f.w.register_dropped_file(&outside.join("a")).unwrap();
+    f.w.document_open(&entry.id, &f.storage).unwrap();
+    assert!(
+        f.w.prepare_dropped_move(&[outside.join("a")], None)
+            .is_err()
+    );
+    assert!(f.w.prepare_dropped_move(&[f.root.clone()], None).is_err());
+    f.w.project.trusted = false;
+    assert!(
+        f.w.prepare_dropped_move(&[outside.join("a")], None)
+            .is_err()
+    );
+}
+#[test]
+fn incoming_move_races_never_overwrite_and_report_completed_items() {
+    let mut f = Fixture::new();
+    let outside = f._tmp.path().join("incoming");
+    std::fs::create_dir(&outside).unwrap();
+    for name in ["a", "b"] {
+        std::fs::write(outside.join(name), name).unwrap();
+    }
+    let job =
+        f.w.prepare_dropped_move(&[outside.join("a"), outside.join("b")], None)
+            .unwrap();
+    f.write("b", "created after preview");
+    let result = job.execute();
+    assert_eq!(result.targets.len(), 1);
+    assert!(result.error.is_some());
+    let Response::FileDrop { entries, errors } = f.w.finish_dropped_move(&result).unwrap() else {
+        panic!()
+    };
+    assert_eq!(entries.len(), 1);
+    assert_eq!(errors.len(), 1);
+    assert!(!outside.join("a").exists());
+    assert!(outside.join("b").exists());
+    assert_eq!(
+        std::fs::read_to_string(f.root.join("b")).unwrap(),
+        "created after preview"
+    );
+}
+#[cfg(unix)]
+#[test]
+fn incoming_folder_move_preserves_links_large_files_and_extended_metadata_without_copying() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let mut f = Fixture::new();
+    let folder = f._tmp.path().join("incoming-folder");
+    std::fs::create_dir(&folder).unwrap();
+    let big = folder.join("big");
+    let file = std::fs::File::create(&big).unwrap();
+    file.set_len(32 * 1024 * 1024).unwrap();
+    std::fs::set_permissions(&big, std::fs::Permissions::from_mode(0o755)).unwrap();
+    xattr::set(&big, "user.fixture", b"metadata").unwrap();
+    let inode = file.metadata().unwrap().ino();
+    std::os::unix::fs::symlink("/outside/untouched", folder.join("link")).unwrap();
+    let job = f.w.prepare_dropped_move(&[folder.clone()], None).unwrap();
+    let result = job.execute();
+    assert!(result.error.is_none());
+    f.w.finish_dropped_move(&result).unwrap();
+    drop(job);
+    assert!(!folder.exists());
+    let moved = f.root.join("incoming-folder/big");
+    assert_eq!(std::fs::metadata(&moved).unwrap().ino(), inode);
+    assert_eq!(
+        std::fs::metadata(&moved).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        xattr::get(&moved, "user.fixture").unwrap().unwrap(),
+        b"metadata"
+    );
+    assert_eq!(
+        std::fs::read_link(f.root.join("incoming-folder/link")).unwrap(),
+        PathBuf::from("/outside/untouched")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn file_recovery_moves_the_original_with_metadata_and_no_size_limit() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let mut f = Fixture::new();
+    let path = f.root.join("metadata.bin");
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(24 * 1024 * 1024).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o751)).unwrap();
+    xattr::set(&path, "user.workspace-test", b"retained metadata").unwrap();
+    #[cfg(target_os = "macos")]
+    {
+        xattr::set(&path, "com.apple.quarantine", b"0081;00000000;Fixture;").unwrap();
+        xattr::set(&path, "com.apple.ResourceFork", b"retained resource fork").unwrap();
+        assert!(
+            Command::new("/bin/chmod")
+                .arg("+a")
+                .arg("everyone allow read")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let attributes = xattr::list(&path)
+        .unwrap()
+        .map(|name| {
+            let value = xattr::get(&path, &name).unwrap();
+            (name, value)
+        })
+        .collect::<Vec<_>>();
+    let before = std::fs::metadata(&path).unwrap();
+    #[cfg(target_os = "macos")]
+    let acl = Command::new("/bin/ls")
+        .arg("-le")
+        .arg(&path)
+        .output()
+        .unwrap()
+        .stdout;
+    let id = f.w.register("metadata.bin".into());
+    f.w.delete_entry(&id, &f.storage).unwrap();
+    assert!(!path.exists());
+    let Response::Items { items, .. } =
+        agent_workspace::files::trash_list(&f.w.project.id, &f.storage).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(items.len(), 1);
+    let retained = f.storage.root.join(format!("trash-{}.file", items[0].id));
+    assert_eq!(std::fs::metadata(&retained).unwrap().ino(), before.ino());
+    // Restoration survives host restart and retains the exact original object.
+    let mut reopened = Workspace::open(&f.root, &[]).unwrap();
+    reopened.trash_restore(&items[0].id, &f.storage).unwrap();
+    let after = std::fs::metadata(&path).unwrap();
+    assert_eq!(after.ino(), before.ino());
+    assert_eq!(after.len(), before.len());
+    assert_eq!(after.mode(), before.mode());
+    for (name, value) in attributes {
+        assert_eq!(xattr::get(&path, name).unwrap(), value);
+    }
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        Command::new("/bin/ls")
+            .arg("-le")
+            .arg(&path)
+            .output()
+            .unwrap()
+            .stdout,
+        acl
+    );
+    assert!(reopened.trash_restore(&items[0].id, &f.storage).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn file_recovery_refuses_a_replaced_or_symlinked_backup_and_restores_legacy_bytes() {
+    use std::os::unix::fs::symlink;
+    let mut f = Fixture::new();
+    f.write("original", "retained original");
+    let id = f.w.register("original".into());
+    f.w.delete_entry(&id, &f.storage).unwrap();
+    let Response::Items { items, .. } =
+        agent_workspace::files::trash_list(&f.w.project.id, &f.storage).unwrap()
+    else {
+        panic!()
+    };
+    let backup = f.storage.root.join(format!("trash-{}.file", items[0].id));
+    let saved = backup.with_extension("saved");
+    std::fs::rename(&backup, &saved).unwrap();
+    std::fs::write(&backup, b"replacement").unwrap();
+    assert!(f.w.trash_restore(&items[0].id, &f.storage).is_err());
+    assert!(!f.root.join("original").exists());
+    std::fs::remove_file(&backup).unwrap();
+    symlink(&saved, &backup).unwrap();
+    assert!(f.w.trash_restore(&items[0].id, &f.storage).is_err());
+    std::fs::remove_file(&backup).unwrap();
+    std::fs::rename(saved, backup).unwrap();
+    f.w.trash_restore(&items[0].id, &f.storage).unwrap();
+    assert_eq!(
+        std::fs::read(f.root.join("original")).unwrap(),
+        b"retained original"
+    );
+
+    let key = uuid::Uuid::new_v4().to_string();
+    f.storage.write(&format!("trash-{key}.json"), &serde_json::json!({
+        "version": 1, "scope": f.w.project.id, "path": agent_workspace::documents::path_token(Path::new("legacy")),
+        "hash": agent_workspace::documents::hash(b"legacy bytes"), "mode": 0o640
+    })).unwrap();
+    std::fs::write(
+        f.storage.root.join(format!("trash-{key}.bin")),
+        b"legacy bytes",
+    )
+    .unwrap();
+    f.w.trash_restore(&key, &f.storage).unwrap();
+    assert_eq!(
+        std::fs::read(f.root.join("legacy")).unwrap(),
+        b"legacy bytes"
+    );
+}
+
+fn delete_review(f: &mut Fixture, id: &str) -> String {
+    let Response::DeleteReview { review, entry, .. } = f.w.review_delete(id, &f.storage).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(entry, id);
+    review
+}
+#[test]
+fn permanent_delete_requires_current_single_use_entry_and_project_review() {
+    let mut f = Fixture::new();
+    f.write("first", "first");
+    f.write("second", "second");
+    let first = f.w.register("first".into());
+    let second = f.w.register("second".into());
+    assert!(
+        f.w.delete_permanently(&first, "invented", &f.storage)
+            .is_err()
+    );
+    let token = delete_review(&mut f, &first);
+    assert!(f.w.delete_permanently(&second, &token, &f.storage).is_err());
+    let mut other = Workspace::open(&f.root, &[]).unwrap();
+    let other_id = other.register("first".into());
+    assert!(
+        other
+            .delete_permanently(&other_id, &token, &f.storage)
+            .is_err()
+    );
+    f.w.delete_permanently(&first, &token, &f.storage).unwrap();
+    assert!(!f.root.join("first").exists());
+    assert_eq!(std::fs::read(f.root.join("second")).unwrap(), b"second");
+    assert!(f.w.delete_permanently(&first, &token, &f.storage).is_err());
+    let Response::Items { items, .. } =
+        agent_workspace::files::trash_list(&f.w.project.id, &f.storage).unwrap()
+    else {
+        panic!()
+    };
+    assert!(items.is_empty());
+}
+#[test]
+fn deletion_review_refuses_changes_live_editors_root_and_private_recovery() {
+    let mut f = Fixture::new();
+    for replace in [false, true] {
+        f.write("changing", "original");
+        let id = f.w.register("changing".into());
+        let token = delete_review(&mut f, &id);
+        if replace {
+            std::fs::rename(f.root.join("changing"), f.root.join("old")).unwrap();
+        }
+        f.write("changing", "new bytes are retained");
+        assert_eq!(
+            f.w.delete_permanently(&id, &token, &f.storage)
+                .unwrap_err()
+                .code,
+            "conflict"
+        );
+        assert_eq!(
+            std::fs::read(f.root.join("changing")).unwrap(),
+            b"new bytes are retained"
+        );
+    }
+    f.write("opened", "opened");
+    let id = f.w.register("opened".into());
+    let token = delete_review(&mut f, &id);
+    f.w.document_open(&id, &f.storage).unwrap();
+    assert_eq!(
+        f.w.delete_permanently(&id, &token, &f.storage)
+            .unwrap_err()
+            .code,
+        "conflict"
+    );
+    let root = f.w.register(PathBuf::new());
+    assert!(f.w.review_delete(&root, &f.storage).is_err());
+    std::fs::create_dir_all(f.root.join("private/recovery")).unwrap();
+    let private = f.w.register("private".into());
+    let storage = Storage::new(f.root.join("private/recovery")).unwrap();
+    assert!(f.w.review_delete(&private, &storage).is_err());
+}
+#[test]
+fn reviewed_delete_works_when_recovery_is_unavailable_without_deleting_on_review() {
+    let mut f = Fixture::new();
+    f.write("unrecoverable", "retained until confirmed");
+    let id = f.w.register("unrecoverable".into());
+    let bad = f._tmp.path().join("not-a-directory");
+    std::fs::write(&bad, b"storage remains untouched").unwrap();
+    let mut storage = Storage::new(f._tmp.path().join("unused")).unwrap();
+    storage.root = bad.clone();
+    assert!(f.w.delete_entry(&id, &storage).is_err());
+    assert_eq!(
+        std::fs::read(f.root.join("unrecoverable")).unwrap(),
+        b"retained until confirmed"
+    );
+    let Response::DeleteReview { review, .. } = f.w.review_delete(&id, &storage).unwrap() else {
+        panic!()
+    };
+    assert!(f.root.join("unrecoverable").exists());
+    f.w.delete_permanently(&id, &review, &storage).unwrap();
+    assert!(!f.root.join("unrecoverable").exists());
+    assert_eq!(std::fs::read(bad).unwrap(), b"storage remains untouched");
+}
+#[cfg(unix)]
+#[test]
+fn permanent_folder_delete_does_not_follow_links_inside_or_in_parent_paths() {
+    use std::os::unix::fs::symlink;
+    let mut f = Fixture::new();
+    let outside = f._tmp.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("keep"), b"outside retained").unwrap();
+    std::fs::create_dir_all(f.root.join("tree/nested")).unwrap();
+    f.write("tree/nested/inside", "inside");
+    symlink(&outside, f.root.join("tree/outside-link")).unwrap();
+    let id = f.w.register("tree".into());
+    let review = delete_review(&mut f, &id);
+    f.w.delete_permanently(&id, &review, &f.storage).unwrap();
+    assert!(!f.root.join("tree").exists());
+    assert_eq!(
+        std::fs::read(outside.join("keep")).unwrap(),
+        b"outside retained"
+    );
+    symlink(&outside, f.root.join("link")).unwrap();
+    let child = f.w.register("link/keep".into());
+    assert!(f.w.review_delete(&child, &f.storage).is_err());
+    let link = f.w.register("link".into());
+    let review = delete_review(&mut f, &link);
+    f.w.delete_permanently(&link, &review, &f.storage).unwrap();
+    assert!(std::fs::symlink_metadata(f.root.join("link")).is_err());
+    assert_eq!(
+        std::fs::read(outside.join("keep")).unwrap(),
+        b"outside retained"
     );
 }

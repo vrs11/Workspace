@@ -1,24 +1,32 @@
 pub mod credentials;
 pub mod dock;
+#[cfg(unix)]
+mod document_metadata;
 pub mod documents;
 pub mod dto;
 pub mod error;
+pub mod external_files;
 pub mod file_paths;
+pub mod file_transfer;
 pub mod files;
 pub mod git;
+pub mod incoming_move;
 #[cfg(windows)]
 pub mod job;
 pub mod launch;
 #[cfg(target_os = "macos")]
 mod macos_lifecycle;
 pub mod media;
+mod preferences;
 pub mod process;
 pub mod project_state;
+mod project_windows;
 pub mod search;
 pub mod security;
 pub mod storage;
 pub mod terminal;
 pub mod updates;
+mod windows;
 #[cfg(windows)]
 pub mod windows_fs;
 pub mod workspace;
@@ -32,7 +40,7 @@ use std::{
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
 };
-use tauri::{Emitter, Manager, ipc::Channel};
+use tauri::{Manager, ipc::Channel};
 use tauri_plugin_dialog::DialogExt;
 use workspace::{UiState, Workspace};
 static PROCESS_STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -97,6 +105,10 @@ pub struct Host {
     startup_ready_ms: Option<u64>,
     startup_visible: Option<bool>,
     watcher: Option<notify::RecommendedWatcher>,
+    preferences: Option<Arc<preferences::Preferences>>,
+    preferences_generation: u64,
+    project_owner: Option<(Arc<project_windows::ProjectWindows>, String)>,
+    closing: Arc<AtomicBool>,
 }
 pub struct AppState {
     pub media_store: Arc<Mutex<std::collections::HashMap<String, (String, media::Preview)>>>,
@@ -107,9 +119,13 @@ pub struct AppState {
     pub maintenance: Arc<AtomicBool>,
     pub search: Arc<AtomicU32>,
     pub update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
-    pub closing: AtomicBool,
+    pub closing: Arc<AtomicBool>,
+    pub close_requested: AtomicBool,
     pub decoration_worker: tokio::sync::Mutex<()>,
     pub decoration_generation: AtomicU64,
+    pub(crate) preferences: Arc<preferences::Preferences>,
+    pub(crate) files: file_transfer::FileTransfers,
+    pub(crate) launches: launch::LaunchRequests,
 }
 // Copy capabilities/paths under the host lock, then release it before any Git
 // process. Revalidate authority before publishing; file operations never wait on
@@ -165,7 +181,7 @@ fn read_file_path(
         .lock()
         .map_err(|_| AppError::new("internal", "Host unavailable"))?;
     let workspace = host.project(scope, kind == FilePathKind::Git, false)?;
-    if workspace.project.root != job.project.root || workspace.entry(entry)? != job.path {
+    if workspace.project.root != job.project.root || workspace.document_path(entry)? != job.path {
         return Err(AppError::new(
             "scope",
             "The file moved while copying its path",
@@ -184,7 +200,14 @@ impl Host {
             ),
             Err(error) => return Err(error),
         };
-        Ok(Self {
+        Ok(Self::with_settings(storage, settings, startup_issue))
+    }
+    fn with_settings(
+        storage: storage::Storage,
+        settings: Settings,
+        startup_issue: Option<String>,
+    ) -> Self {
+        Self {
             storage,
             media_store: Default::default(),
             terminal_context: Arc::new(RwLock::new((None, settings.clone()))),
@@ -196,6 +219,97 @@ impl Host {
             workspace: None,
             terminals: Arc::new(terminal::TerminalService::default()),
             watcher: None,
+            preferences: None,
+            preferences_generation: 0,
+            project_owner: None,
+            closing: Arc::new(AtomicBool::new(false)),
+        }
+    }
+    fn with_preferences<T>(
+        &mut self,
+        write: bool,
+        operation: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        let shared = self.preferences.clone();
+        let _guard = if write {
+            shared
+                .as_ref()
+                .map(|p| {
+                    p.gate
+                        .lock()
+                        .map_err(|_| AppError::new("internal", "Preferences unavailable"))
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        if let Some(shared) = &shared {
+            if let Some(current) = shared.changed_since(self.preferences_generation)? {
+                self.settings = current.settings;
+                self.startup_issue = current.issue;
+                self.preferences_generation = current.generation;
+                *self
+                    .terminal_context
+                    .write()
+                    .map_err(|_| AppError::new("internal", "Workspace unavailable"))? = (
+                    self.workspace.as_ref().map(|w| w.project.clone()),
+                    self.settings.clone(),
+                );
+            }
+        }
+        let result = operation(self);
+        if write && result.is_ok() {
+            if let Some(shared) = &shared {
+                self.preferences_generation =
+                    shared.publish(self.settings.clone(), self.startup_issue.clone())?;
+            }
+        }
+        if write && result.is_err() {
+            if let Some(shared) = &shared {
+                let previous = shared.snapshot()?;
+                self.settings = previous.settings;
+                self.startup_issue = previous.issue;
+                if let Some(workspace) = &mut self.workspace {
+                    workspace.project.trusted = self
+                        .settings
+                        .recent
+                        .iter()
+                        .find(|p| p.id == workspace.project.id)
+                        .is_some_and(|p| p.trusted);
+                }
+                *self
+                    .terminal_context
+                    .write()
+                    .map_err(|_| AppError::new("internal", "Workspace unavailable"))? = (
+                    self.workspace.as_ref().map(|w| w.project.clone()),
+                    self.settings.clone(),
+                );
+            }
+        }
+        result
+    }
+    fn configure_git(&mut self, executable: String) -> Result<Response> {
+        self.with_preferences(true, |host| {
+            if host.startup_issue.is_some() {
+                return Err(AppError::new(
+                    "repairRequired",
+                    "Repair preferences before configuring tools",
+                ));
+            }
+            host.settings.git = Some(executable);
+            host.storage.write("settings.json", &host.settings)?;
+            *host
+                .terminal_context
+                .write()
+                .map_err(|_| AppError::new("internal", "Workspace unavailable"))? = (
+                host.workspace.as_ref().map(|w| w.project.clone()),
+                host.settings.clone(),
+            );
+            Ok(Response::Bootstrap {
+                settings: host.settings.clone(),
+                project: host.workspace.as_ref().map(|w| w.project.clone()),
+                startup_issue: None,
+            })
         })
     }
     pub fn project(
@@ -204,6 +318,12 @@ impl Host {
         trusted: bool,
         mutation: bool,
     ) -> Result<&mut Workspace> {
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(AppError::new(
+                "unauthorized",
+                "This workspace window is closed",
+            ));
+        }
         let w = self
             .workspace
             .as_mut()
@@ -297,6 +417,28 @@ impl Host {
         bus: Arc<EventBus>,
         cancel: Arc<AtomicU32>,
     ) -> Result<Response> {
+        if self.closing.load(Ordering::SeqCst) {
+            return Err(AppError::new(
+                "unauthorized",
+                "This workspace window is closed",
+            ));
+        }
+        let write = matches!(
+            &request,
+            Request::Settings { .. }
+                | Request::Trust { .. }
+                | Request::OpenProject { .. }
+                | Request::RelocateProject { .. }
+                | Request::RepairSettings { .. }
+        );
+        self.with_preferences(write, |host| host.handle_inner(request, bus, cancel))
+    }
+    fn handle_inner(
+        &mut self,
+        request: Request,
+        bus: Arc<EventBus>,
+        cancel: Arc<AtomicU32>,
+    ) -> Result<Response> {
         if self.maintenance.load(Ordering::SeqCst)
             && !matches!(
                 request,
@@ -366,6 +508,11 @@ impl Host {
                     ));
                 }
                 let w = Workspace::open(Path::new(&path), &self.settings.recent)?;
+                let reservation = self
+                    .project_owner
+                    .as_ref()
+                    .map(|(owners, label)| owners.reserve(label, &w.dir))
+                    .transpose()?;
                 let project = w.project.clone();
                 let settings = self.settings_with_project(&project);
                 let watcher = Self::watch_project(&project, bus)?;
@@ -377,6 +524,9 @@ impl Host {
                     .map_err(|_| AppError::new("internal", "Preview unavailable"))?
                     .clear();
                 self.workspace = Some(w);
+                if let Some(reservation) = reservation {
+                    reservation.commit();
+                }
                 *context = (Some(project.clone()), self.settings.clone());
                 Ok(Response::Project { project })
             }
@@ -411,6 +561,11 @@ impl Host {
                     ));
                 }
                 let mut next = Workspace::relocated(Path::new(&path), &previous)?;
+                let reservation = self
+                    .project_owner
+                    .as_ref()
+                    .map(|(owners, label)| owners.reserve(label, &next.dir))
+                    .transpose()?;
                 if same {
                     next.project.trusted = self
                         .workspace
@@ -441,6 +596,9 @@ impl Host {
                     self.workspace = Some(next);
                 }
                 cancel.fetch_add(1, Ordering::SeqCst);
+                if let Some(reservation) = reservation {
+                    reservation.commit();
+                }
                 self.settings = settings;
                 self.watcher = watcher;
                 *context = (Some(project.clone()), self.settings.clone());
@@ -547,8 +705,15 @@ impl Host {
             } => self
                 .project(&scope, false, false)?
                 .finish_reconcile(&refresh, accept),
+            Request::StartFileDrag { .. }
+            | Request::OpenDroppedFiles { .. }
+            | Request::MoveDroppedFiles { .. }
+            | Request::InspectDroppedMove { .. } => Err(AppError::new(
+                "scope",
+                "Native file transfer requires an OS offer or gesture",
+            )),
             Request::OpenFile { scope, entry } => {
-                self.project(&scope, false, false)?.entry(&entry)?;
+                self.project(&scope, false, false)?.document_path(&entry)?;
                 // Text buffers/recovery outrank extension-based previews. This
                 // also reaches document recovery when the original SVG is gone.
                 let existing = self
@@ -638,6 +803,16 @@ impl Host {
                     &self.storage,
                 )
             }
+            Request::ReviewMetadata { scope, document } => self
+                .project(&scope, false, false)?
+                .review_metadata(&document),
+            Request::AllowMetadataLoss {
+                scope,
+                document,
+                review,
+            } => self
+                .project(&scope, true, true)?
+                .allow_metadata_loss(&document, &review),
             Request::Save {
                 scope,
                 document,
@@ -716,6 +891,24 @@ impl Host {
                     .as_mut()
                     .expect("validated")
                     .delete_entry(&entry, &self.storage)
+            }
+            Request::ReviewDelete { scope, entry } => {
+                self.project(&scope, true, true)?;
+                self.workspace
+                    .as_mut()
+                    .expect("validated")
+                    .review_delete(&entry, &self.storage)
+            }
+            Request::DeletePermanently {
+                scope,
+                entry,
+                review,
+            } => {
+                self.project(&scope, true, true)?;
+                self.workspace
+                    .as_mut()
+                    .expect("validated")
+                    .delete_permanently(&entry, &review, &self.storage)
             }
             Request::Search {
                 scope,
@@ -953,12 +1146,38 @@ impl Host {
                 self.workspace.as_mut().expect("validated").project_state = None;
                 let ui =
                     project_state::ui(self.workspace.as_mut().expect("validated"), &self.storage)?;
+                let external = self
+                    .storage
+                    .read::<external_files::ExternalUi>(&format!("external-ui-{scope}.json"))?
+                    .unwrap_or_default();
+                if external.version > 1 || external.tabs.len() > 100 {
+                    return Err(AppError::new(
+                        "stateVersion",
+                        "External file tab state is unsupported; recovery is retained.",
+                    ));
+                }
                 let w = self.workspace.as_mut().expect("validated");
+                let mut external_active = None;
+                let mut external_split = None;
+                let mut external_tabs = Vec::new();
+                for path in &external.tabs {
+                    // Missing files are left out of layout; acknowledged recovery stays private.
+                    if let Ok(entry) = w.register_dropped_file(path) {
+                        if Some(path) == external.active.as_ref() {
+                            external_active = Some(entry.id.clone());
+                        }
+                        if Some(path) == external.split.as_ref() {
+                            external_split = Some(entry.id.clone());
+                        }
+                        external_tabs.push(entry.id);
+                    }
+                }
                 let mut tabs = ui
                     .tabs
                     .iter()
                     .map(|p| documents::token_path(p).map(|p| w.register(p)))
                     .collect::<Result<Vec<_>>>()?;
+                tabs.extend(external_tabs);
                 // Renderer reload/layout repair must neither orphan dirty
                 // native records nor leave invisible clean editor references.
                 for (id, document) in &w.documents {
@@ -984,12 +1203,12 @@ impl Host {
                     persistence: w.project_state.as_ref().and_then(|c| c.warning.clone()),
                     dock: ui.dock,
                     tabs,
-                    active,
+                    active: external_active.or(active),
                     layout: ui.layout,
-                    split: ui
+                    split: external_split.or(ui
                         .split
                         .map(|p| documents::token_path(&p).map(|p| w.register(p)))
-                        .transpose()?,
+                        .transpose()?),
                 })
             }
             Request::UiWrite {
@@ -1022,22 +1241,42 @@ impl Host {
                     .iter()
                     .map(|id| w.entry(id).map(|p| documents::path_token(&p)))
                     .collect::<Result<Vec<_>>>()?;
+                let external = w.external_ui(&tabs, &active, &split);
                 let ui = UiState {
                     view,
                     version: 2,
                     dock,
                     tabs: tabs
                         .iter()
+                        .filter(|id| !w.external_files.contains_key(*id))
                         .map(|id| w.entry(id).map(|p| documents::path_token(&p)))
                         .collect::<Result<Vec<_>>>()?,
                     active: active
+                        .filter(|id| !w.external_files.contains_key(id))
                         .map(|id| w.entry(&id).map(|p| documents::path_token(&p)))
                         .transpose()?,
                     layout,
                     split: split
+                        .filter(|id| !w.external_files.contains_key(id))
                         .map(|id| w.entry(&id).map(|p| documents::path_token(&p)))
                         .transpose()?,
                 };
+                let external_name = format!("external-ui-{scope}.json");
+                let previous = self
+                    .storage
+                    .read::<external_files::ExternalUi>(&external_name)?;
+                if previous.as_ref() != Some(&external)
+                    && (previous.is_some() || !external.tabs.is_empty())
+                {
+                    self.storage.write(&external_name, &external)?;
+                }
+                let keep: std::collections::HashSet<_> = tabs.iter().cloned().collect();
+                let w = self.workspace.as_mut().expect("validated");
+                w.external_files.retain(|id, _| {
+                    keep.contains(id)
+                        || w.documents.contains_key(id)
+                        || w.media.values().any(|preview| preview.info.entry == *id)
+                });
                 let warning = project_state::save_ui(
                     self.workspace.as_mut().expect("validated"),
                     &self.storage,
@@ -1068,6 +1307,28 @@ impl Host {
                     }
                     if let Some(r) = self.storage.read::<documents::Recovery>(&name)? {
                         if r.scope == scope {
+                            if let Some(path) = r.external.as_ref() {
+                                let entry = self
+                                    .workspace
+                                    .as_mut()
+                                    .expect("validated")
+                                    .register_external_recovery(path, &r.entry)?;
+                                if entry.id != r.entry {
+                                    return Err(AppError::new(
+                                        "scope",
+                                        "External recovery identity mismatch",
+                                    ));
+                                }
+                                items.push(NamedItem {
+                                    id: entry.id,
+                                    label: entry.path,
+                                    detail: format!(
+                                        "External file · acknowledged checkpoint {}",
+                                        r.revision
+                                    ),
+                                });
+                                continue;
+                            }
                             let p = documents::token_path(&r.path)?;
                             let id = self
                                 .workspace
@@ -1120,7 +1381,11 @@ impl Host {
 }
 
 fn window_allowed(label: &str) -> Result<()> {
-    if label != "main" {
+    if label != "main"
+        && !label
+            .strip_prefix("workspace-")
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+    {
         Err(AppError::new(
             "unauthorized",
             "This window has no workspace authority",
@@ -1144,11 +1409,10 @@ fn navigation_allowed(url: &tauri::Url, development: bool) -> bool {
 #[tauri::command]
 async fn subscribe(
     window: tauri::WebviewWindow,
-    state: tauri::State<'_, AppState>,
     scope: String,
     channel: Channel<StreamEvent>,
 ) -> Result<()> {
-    window_allowed(window.label())?;
+    let state = windows::state(window.app_handle(), window.label())?;
     state
         .host
         .lock()
@@ -1159,16 +1423,24 @@ async fn subscribe(
         .target
         .lock()
         .map_err(|_| AppError::new("internal", "Stream unavailable"))? = Some((scope, channel));
+    if state.close_requested.load(Ordering::SeqCst) {
+        if let Some(project) = &state
+            .terminal_context
+            .read()
+            .map_err(|_| AppError::new("internal", "Workspace unavailable"))?
+            .0
+        {
+            state.bus.emit(StreamEvent::CloseRequested {
+                scope: project.id.clone(),
+            });
+        }
+    }
     Ok(())
 }
 
 #[tauri::command]
-async fn dispatch(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, AppState>,
-    request: Request,
-) -> Result<Response> {
-    window_allowed(window.label())?;
+async fn dispatch(window: tauri::WebviewWindow, request: Request) -> Result<Response> {
+    let state = windows::state(window.app_handle(), window.label())?;
     if state.maintenance.load(Ordering::SeqCst)
         && !matches!(
             request,
@@ -1180,6 +1452,7 @@ async fn dispatch(
                 | Request::TerminalClose { .. }
                 | Request::ClipboardRead
                 | Request::ClipboardWrite { .. }
+                | Request::CancelClose
         )
     {
         return Err(AppError::new(
@@ -1188,6 +1461,100 @@ async fn dispatch(
         ));
     }
     match request {
+        Request::Bootstrap => {
+            let preferences = state.preferences.snapshot()?;
+            let context = state
+                .terminal_context
+                .read()
+                .map_err(|_| AppError::new("internal", "Workspace unavailable"))?;
+            Ok(Response::Bootstrap {
+                settings: preferences.settings,
+                project: context.0.clone(),
+                startup_issue: preferences.issue,
+            })
+        }
+        Request::NewWindow { path } => {
+            windows::open(window.app_handle().clone(), path, false).await
+        }
+        Request::QuitApplication => {
+            window.app_handle().exit(0);
+            Ok(Response::Ok)
+        }
+        Request::FocusProjectWindow { path } => {
+            if path.len() > 8192 || path.contains('\0') {
+                return Err(AppError::limit());
+            }
+            let registry = window.state::<windows::Windows>();
+            let owner = match registry.projects.owner(Path::new(&path)) {
+                Ok(owner) => owner,
+                Err(e) if e.code == "notFound" => None,
+                Err(e) => return Err(e),
+            };
+            if let Some(owner) = &owner {
+                windows::focus(window.app_handle(), owner);
+            }
+            Ok(Response::WindowOpened {
+                existing: owner.is_some(),
+                window: owner,
+            })
+        }
+        Request::CancelClose => {
+            state.close_requested.store(false, Ordering::SeqCst);
+            window.state::<windows::Windows>().cancel_close();
+            Ok(Response::Ok)
+        }
+        Request::InspectDroppedMove { scope, offer } => {
+            let paths = state.files.peek(&offer)?;
+            let host = state.host.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                host.lock()
+                    .map_err(|_| AppError::new("internal", "Workspace unavailable"))?
+                    .project(&scope, true, false)?
+                    .inspect_dropped_move(&paths)
+            })
+            .await
+            .map_err(|_| AppError::new("internal", "Drop preview failed"))?
+        }
+        Request::MoveDroppedFiles {
+            scope,
+            offer,
+            parent,
+        } => {
+            let paths = state.files.take(&offer)?;
+            let host = state.host.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let job = host
+                    .lock()
+                    .map_err(|_| AppError::new("internal", "Workspace unavailable"))?
+                    .project(&scope, true, true)?
+                    .prepare_dropped_move(&paths, parent.as_deref())?;
+                let result = job.execute();
+                let response = host
+                    .lock()
+                    .map_err(|_| AppError::new("internal", "Workspace unavailable"))?
+                    .project(&scope, true, false)?
+                    .finish_dropped_move(&result);
+                drop(job);
+                response
+            })
+            .await
+            .map_err(|_| AppError::new("internal", "File move failed"))?
+        }
+        Request::StartFileDrag { scope, entries } => {
+            file_transfer::start_drag(window, scope, entries).await
+        }
+        Request::OpenDroppedFiles { scope, offer } => {
+            let paths = state.files.take(&offer)?;
+            let host = state.host.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                host.lock()
+                    .map_err(|_| AppError::new("internal", "Workspace unavailable"))?
+                    .project(&scope, false, false)?
+                    .dropped_files(&paths)
+            })
+            .await
+            .map_err(|_| AppError::new("internal", "File drop worker failed"))?
+        }
         Request::FilePath { scope, entry, kind } => {
             let host = state.host.clone();
             tauri::async_runtime::spawn_blocking(move || {
@@ -1217,10 +1584,7 @@ async fn dispatch(
             Ok(response)
         }
         Request::TakeOpenRequest => Ok(Response::Text {
-            text: window
-                .state::<launch::LaunchRequests>()
-                .take()
-                .unwrap_or_default(),
+            text: state.launches.take().unwrap_or_default(),
         }),
         Request::FinishClose => {
             let h = state
@@ -1277,6 +1641,8 @@ async fn dispatch(
         | Request::TerminalResize { .. }
         | Request::TerminalClose { .. }) => {
             let context = state.terminal_context.clone();
+            let preferences = state.preferences.clone();
+            let closing = state.closing.clone();
             let terminals = state.terminals.clone();
             let maintenance = state.maintenance.clone();
             tauri::async_runtime::spawn_blocking(move || {
@@ -1293,6 +1659,12 @@ async fn dispatch(
                     | Request::TerminalClose { scope, .. } => scope,
                     _ => unreachable!(),
                 };
+                if closing.load(Ordering::SeqCst) {
+                    return Err(AppError::new(
+                        "unauthorized",
+                        "This workspace window is closed",
+                    ));
+                }
                 let project = context
                     .0
                     .as_ref()
@@ -1329,7 +1701,7 @@ async fn dispatch(
                             Path::new(&project.root),
                             cols,
                             rows,
-                            &context.1,
+                            &preferences.snapshot()?.settings,
                         )?;
                         Ok(Response::Terminal { info, token })
                     }
@@ -1383,6 +1755,12 @@ async fn dispatch(
             Ok(response)
         }
         Request::UpdateInstall => {
+            if window.state::<windows::Windows>().count() > 1 {
+                return Err(AppError::new(
+                    "workspaceBusy",
+                    "Close the other Workspace windows before installing an update",
+                ));
+            }
             let (gate, _maintenance_guard) = {
                 let h = state
                     .host
@@ -1402,16 +1780,7 @@ async fn dispatch(
                         "Save/discard all buffers, and close terminals before installing an update",
                     ));
                 }
-                if state
-                    .maintenance
-                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_err()
-                {
-                    return Err(AppError::new(
-                        "workspaceBusy",
-                        "An application update is already in progress",
-                    ));
-                }
+                window.state::<windows::Windows>().begin_update()?;
                 let maintenance_guard = MaintenanceGuard(state.maintenance.clone());
                 let activity = h.workspace.as_ref().map(|w| {
                     w.activity.store(3, Ordering::SeqCst);
@@ -1481,7 +1850,7 @@ async fn dispatch(
             Ok(Response::Ok)
         }
         Request::PickFolder => {
-            let dialog = window.app_handle().dialog().file();
+            let dialog = window.app_handle().dialog().file().set_parent(&window);
             let path = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_folder())
                 .await
                 .map_err(|_| AppError::new("internal", "Folder dialog failed"))?
@@ -1496,7 +1865,7 @@ async fn dispatch(
             if tool != "git" {
                 return Err(AppError::new("scope", "Unknown tool"));
             }
-            let dialog = window.app_handle().dialog().file();
+            let dialog = window.app_handle().dialog().file().set_parent(&window);
             let path = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
                 .await
                 .map_err(|_| AppError::new("internal", "Executable dialog failed"))?
@@ -1508,26 +1877,11 @@ async fn dispatch(
                 .host
                 .lock()
                 .map_err(|_| AppError::new("internal", "Host unavailable"))?;
-            if host.startup_issue.is_some() {
-                return Err(AppError::new(
-                    "repairRequired",
-                    "Repair preferences before configuring tools",
-                ));
+            let result = host.configure_git(exe.to_string_lossy().into());
+            if result.is_ok() {
+                windows::preferences_changed(window.app_handle());
             }
-            host.settings.git = Some(exe.to_string_lossy().into());
-            host.storage.write("settings.json", &host.settings)?;
-            *host
-                .terminal_context
-                .write()
-                .map_err(|_| AppError::new("internal", "Workspace unavailable"))? = (
-                host.workspace.as_ref().map(|w| w.project.clone()),
-                host.settings.clone(),
-            );
-            Ok(Response::Bootstrap {
-                settings: host.settings.clone(),
-                project: host.workspace.as_ref().map(|w| w.project.clone()),
-                startup_issue: None,
-            })
+            result
         }
         Request::CancelSearch { scope, generation } => {
             let context = state
@@ -1559,44 +1913,79 @@ async fn dispatch(
                 }
                 state.search.store(*generation, Ordering::SeqCst);
             }
+            let return_window = matches!(&request, Request::OpenProject { .. });
+            let open_path = match &request {
+                Request::OpenProject { path } | Request::RelocateProject { path, .. } => {
+                    Some(path.clone())
+                }
+                _ => None,
+            };
+            let changed_preferences = matches!(
+                &request,
+                Request::Settings { .. }
+                    | Request::Trust { .. }
+                    | Request::OpenProject { .. }
+                    | Request::RelocateProject { .. }
+                    | Request::RepairSettings { .. }
+            );
             let h = state.host.clone();
             let bus = state.bus.clone();
             let cancel = state.search.clone();
-            tauri::async_runtime::spawn_blocking(move || {
+            let result = tauri::async_runtime::spawn_blocking(move || {
                 h.lock()
                     .map_err(|_| AppError::new("internal", "Host unavailable"))?
                     .handle(request, bus, cancel)
             })
             .await
-            .map_err(|_| AppError::new("internal", "Native worker failed"))?
+            .map_err(|_| AppError::new("internal", "Native worker failed"))?;
+            if result
+                .as_ref()
+                .is_err_and(|e| e.code == "projectAlreadyOpen")
+            {
+                if let Some(path) = open_path {
+                    if let Some(owner) = window
+                        .state::<windows::Windows>()
+                        .projects
+                        .owner(Path::new(&path))?
+                    {
+                        windows::focus(window.app_handle(), &owner);
+                        if return_window {
+                            return Ok(Response::WindowOpened {
+                                window: Some(owner),
+                                existing: true,
+                            });
+                        }
+                    }
+                }
+            }
+            if let Ok(Response::Project { project }) = &result {
+                let _ = window.set_title(&format!("{} — Workspace", project.name));
+            }
+            if changed_preferences && result.is_ok() {
+                windows::preferences_changed(window.app_handle());
+            }
+            result
         }
     }
 }
 pub fn run() {
     let _ = PROCESS_STARTED.set(std::time::Instant::now());
     eprintln!("AW_METRIC process_started pid={}", std::process::id());
-    let requests = launch::LaunchRequests::default();
-    if let (Ok(args), Ok(cwd)) = (
-        std::env::args_os()
-            .map(|s| s.into_string())
-            .collect::<std::result::Result<Vec<_>, _>>(),
-        std::env::current_dir(),
-    ) {
-        if let Some(path) = launch::folder_argument(&args, &cwd) {
-            requests.push(path);
-        }
-    }
+    let initial_folder = std::env::args_os()
+        .map(|s| s.into_string())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()
+        .and_then(|args| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|cwd| launch::folder_argument(&args, &cwd))
+        });
     let builder = tauri::Builder::default()
+        .manage(windows::PendingWindows::default())
         .register_asynchronous_uri_scheme_protocol("workspace-media", media::protocol)
-        .manage(requests)
+        .on_webview_event(file_transfer::webview_event)
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-            if let Some(path) = launch::folder_argument(&args, Path::new(&cwd)) {
-                app.state::<launch::LaunchRequests>().push(path);
-                let _ = app.emit_to("main", "folder-requested", ());
-            }
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_focus();
-            }
+            windows::launch(app, launch::folder_argument(&args, Path::new(&cwd)));
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -1606,39 +1995,40 @@ pub fn run() {
         .plugin(tauri_plugin_wdio_webdriver::init())
         .plugin(tauri_plugin_wdio::init());
     builder
-        .setup(|app| {
+        .setup(move |app| {
             let data_root = app.path().app_data_dir()?;
             #[cfg(feature = "desktop-test")]
             let data_root = std::env::var_os("AW_APP_DATA_DIR")
                 .map(PathBuf::from)
                 .unwrap_or(data_root);
-            let host = Host::new(data_root)?;
-            app.manage(AppState {
-                media_store: host.media_store.clone(),
-                terminals: host.terminals.clone(),
-                terminal_context: host.terminal_context.clone(),
-                maintenance: host.maintenance.clone(),
-                host: Arc::new(Mutex::new(host)),
-                bus: EventBus::new(),
-                search: Arc::new(AtomicU32::new(0)),
-                update: tokio::sync::Mutex::new(None),
-                closing: AtomicBool::new(false),
-                decoration_worker: tokio::sync::Mutex::new(()),
-                decoration_generation: AtomicU64::new(0),
-            });
+            app.manage(windows::Windows::new(data_root)?);
             #[cfg(target_os = "macos")]
             macos_lifecycle::install(app.handle())?;
-            tauri::WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
-                .on_navigation(|url| navigation_allowed(url, cfg!(debug_assertions)))
-                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-                .build()?;
+            windows::install_menu(app.handle())?;
+            windows::create(app.handle(), "main", initial_folder, true)?;
+            for path in app.state::<windows::PendingWindows>().take_all() {
+                windows::launch(app.handle(), path);
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(event) = event {
+                file_transfer::window_event(window, event);
+            }
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                let registry = window.state::<windows::Windows>();
+                registry.remove(window.label());
+                if registry.count() == 0 && registry.exit_allowed() {
+                    window.app_handle().exit(0);
+                } else {
+                    registry.continue_quit(window.app_handle());
+                }
+                return;
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let state = window.state::<AppState>();
-                // Window callbacks run on the UI thread; never wait behind a
-                // Git/network worker holding the host mutex.
+                let Ok(state) = windows::state(window.app_handle(), window.label()) else {
+                    return;
+                };
                 if state.maintenance.load(Ordering::SeqCst) {
                     api.prevent_close();
                     return;
@@ -1647,13 +2037,14 @@ pub fn run() {
                     Ok(context) => {
                         if let Some(project) = &context.0 {
                             api.prevent_close();
+                            state.close_requested.store(true, Ordering::SeqCst);
                             state.bus.emit(StreamEvent::CloseRequested {
                                 scope: project.id.clone(),
                             });
                         }
                     }
                     Err(_) => api.prevent_close(),
-                }
+                };
             }
         })
         .invoke_handler(tauri::generate_handler![dispatch, subscribe])
@@ -1664,39 +2055,25 @@ pub fn run() {
             if let tauri::RunEvent::Opened { urls } = &event {
                 for url in urls {
                     if let Ok(path) = url.to_file_path() {
-                        if let Some(path) = path.to_str().filter(|path| path.len() <= 8192) {
-                            app.state::<launch::LaunchRequests>().push(path.into());
+                        if let Some(path) = path.to_str().filter(|p| p.len() <= 8192) {
+                            windows::launch(app, Some(path.into()));
                         }
                     }
                 }
-                let _ = app.emit_to("main", "folder-requested", ());
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_focus();
-                }
             }
-            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
-                let state = app.state::<AppState>();
-                if state.maintenance.load(Ordering::SeqCst) {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
+                let registry = app.state::<windows::Windows>();
+                if !registry.exit_allowed() {
                     api.prevent_exit();
-                } else if !state.closing.load(Ordering::SeqCst) {
-                    match state.terminal_context.try_read() {
-                        Ok(context) => {
-                            if let Some(project) = &context.0 {
-                                api.prevent_exit();
-                                state.bus.emit(StreamEvent::CloseRequested {
-                                    scope: project.id.clone(),
-                                });
-                            } else {
-                                state.closing.store(true, Ordering::SeqCst);
-                            }
-                        }
-                        Err(_) => api.prevent_exit(),
+                    if code.is_some() {
+                        registry.request_quit(app);
                     }
                 }
             }
             if matches!(event, tauri::RunEvent::Exit) {
-                let s = app.state::<AppState>();
-                s.terminals.close_all();
+                for (_, state) in app.state::<windows::Windows>().all().unwrap_or_default() {
+                    state.terminals.close_all();
+                }
             }
         });
 }
@@ -2298,5 +2675,101 @@ mod tests {
         assert_eq!(std::fs::read(root.join("file")).unwrap(), b"unchanged");
         assert!(!root.join("created").exists());
         assert!(host.terminals.is_empty());
+    }
+    #[test]
+    fn external_tabs_restore_privately_without_absolute_paths_in_project_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let outside = tmp.path().join("outside.txt");
+        std::fs::write(&outside, "outside").unwrap();
+        let mut host = Host::new(tmp.path().join("app-data")).unwrap();
+        let bus = EventBus::new();
+        let cancel = Arc::new(AtomicU32::new(0));
+        let Response::Project { project } = host
+            .handle(
+                Request::OpenProject {
+                    path: root.to_str().unwrap().into(),
+                },
+                bus.clone(),
+                cancel.clone(),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        host.workspace.as_mut().unwrap().project.trusted = true;
+        let entry = host
+            .workspace
+            .as_mut()
+            .unwrap()
+            .register_dropped_file(&outside)
+            .unwrap();
+        host.handle(
+            Request::UiWrite {
+                scope: project.id.clone(),
+                tabs: vec![entry.id.clone()],
+                active: Some(entry.id.clone()),
+                split: Some(entry.id.clone()),
+                layout: vec![20., 80.],
+                dock: None,
+                view: None,
+            },
+            bus.clone(),
+            cancel.clone(),
+        )
+        .unwrap();
+        let portable: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join(".agent-workspace/workspace.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(portable["ui"]["tabs"], serde_json::json!([]));
+        assert!(portable["ui"]["active"].is_null());
+        assert!(portable["ui"]["split"].is_null());
+        assert!(!portable.to_string().contains("outside.txt"));
+        host.workspace = Some(Workspace::open(&root, &[]).unwrap());
+        let Response::Ui {
+            tabs,
+            active,
+            split,
+            ..
+        } = host
+            .handle(
+                Request::UiRead {
+                    scope: project.id.clone(),
+                },
+                bus.clone(),
+                cancel.clone(),
+            )
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(tabs, vec![entry.id.clone()]);
+        assert_eq!(active, Some(entry.id.clone()));
+        assert_eq!(split, Some(entry.id.clone()));
+        host.handle(
+            Request::UiWrite {
+                scope: project.id.clone(),
+                tabs: vec![],
+                active: None,
+                split: None,
+                layout: vec![20., 80.],
+                dock: None,
+                view: None,
+            },
+            bus,
+            cancel,
+        )
+        .unwrap();
+        assert!(host.workspace.as_ref().unwrap().external_files.is_empty());
+        assert!(
+            host.storage
+                .read::<external_files::ExternalUi>(&format!("external-ui-{}.json", project.id))
+                .unwrap()
+                .unwrap()
+                .tabs
+                .is_empty()
+        );
     }
 }

@@ -30,7 +30,7 @@ describe("real native GUI workflow", () => {
       async () => (await $$(".trust-banner")).length === 0,
     );
     await $('.explorer [role="treeitem"]').waitForDisplayed();
-    await $('.explorer [role="treeitem"]').click();
+    await $('.explorer [role="treeitem"]').doubleClick();
     await $(".monaco-editor").waitForDisplayed();
     console.info("Editor ready");
     await browser.execute(() => {

@@ -180,14 +180,8 @@ small {
 }
 .brand {
   display: flex;
-  gap: 9px;
   align-items: center;
-  font-weight: 600;
   margin-right: 10px;
-}
-.brand small {
-  font-weight: 400;
-  font-size: 10px;
 }
 .brand-mark {
   display: block;
@@ -203,7 +197,6 @@ small {
   max-width: 260px;
   font-size: 11px;
 }
-.notice,
 .trust-banner,
 .editor-warning {
   display: flex;
@@ -217,9 +210,39 @@ small {
   max-height: 140px;
   overflow: auto;
 }
-.notice {
+.notification-toast {
+  position: fixed;
+  right: 12px;
+  bottom: calc(37px + env(safe-area-inset-bottom, 0px));
+  z-index: 90;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: max-content;
+  max-width: min(440px, calc(100vw - 24px));
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
   color: var(--warning);
   background: var(--surface);
+  box-shadow: 0 4px 18px #0005;
+}
+.notification-toast[hidden] {
+  display: none;
+}
+.notification-message {
+  min-width: 0;
+  max-height: min(180px, calc(100dvh - 120px));
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.notification-dismiss {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 2px;
 }
 .trust-banner,
 .editor-warning {
@@ -1259,9 +1282,6 @@ body
   font-size: 11px;
 }
 @media (max-width: 1050px) {
-  .brand small {
-    display: none;
-  }
   .app-header select {
     max-width: 160px;
   }

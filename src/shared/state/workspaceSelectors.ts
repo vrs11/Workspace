@@ -1,11 +1,13 @@
 import type { useApp } from "./store";
 type State = ReturnType<typeof useApp.getState>;
-// Frequent editor counters belong to the status bar, not the dock tree.
+// Editor counters and notifications update their own views, independently of docks.
 export function workspaceSnapshot(state: State) {
-  const { docs, cursor, busy, ...snapshot } = state;
+  const { docs, cursor, busy, notice, noticeDetails, ...snapshot } = state;
   void docs;
   void cursor;
   void busy;
+  void notice;
+  void noticeDetails;
   return snapshot;
 }
 export function activeDocumentUi(state: State) {

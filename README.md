@@ -6,6 +6,15 @@ Open a folder, trust it, edit or run a command, inspect visual diffs, stage sele
 
 Image previews zoom with the scroll wheel around the pointer; drag the image to pan, or choose Fit to reset. Raster 100% maps one source pixel to one display pixel, including Retina displays. Smooth scaling is the default; Source pixels preserves original pixels while enlarging and is available in Image rendering. SVG is rendered at its target layout size for vector sharpness. Panels remember their positions and sizes when hidden/reopened. Use the panel × to hide it and Workspace layout to show it again. Each trusted writable project stores its workspace arrangement, tab references, explorer expansion/views and terminal geometry in `.agent-workspace/workspace.json`; the directory ignores its own contents in Git. Folder switches and quit flush pending layout changes. Restricted/read-only folders retain a private fallback and show a notice. Global preferences, trust and unsaved editor recovery remain in private app data. Project settings never contain terminal commands, transcripts or live process IDs.
 
+Explorer supports Cmd/Ctrl-click to select individual items, Shift-click for a
+range, and Cmd/Ctrl+A for all visible rows. Drag a selection into a project
+folder to move it, or out to a file manager to move the saved files. Drop files/folders from
+the OS into Explorer to move them into the project; editor drops open in place.
+Existing destinations are never overwritten. Explorer moves across disks are
+refused without changing the sources; use the system file manager for those. Delete confirms the selected files and folders and keeps recovery copies.
+Dropping local files onto the editor opens them in place, including files outside
+the project. External tab references and recovery remain in private app data.
+
 ## Build and validate
 
 Pinned tools: Node 24.22.1, pnpm 10.22.0 and Rust 1.99.1. Install the [Tauri native prerequisites](https://v2.tauri.app/start/prerequisites/). Run commands from the repository root. `source scripts/env.sh` selects repository-local tools when available and applies the configured macOS deployment target. No CLI AI program, account or inference is required to build or test.
@@ -67,11 +76,23 @@ Open an image, video or audio file from Files or Quick open to preview it in an 
 
 When idle or focus-loss autosave is enabled, the normal toolbar Save button is hidden. The Save and Save All shortcuts and command-palette actions remain available. Error Retry and explicit conflict/recovery decisions stay visible.
 
+The macOS `com.apple.macl` attribute is preserved during saves, including after
+moving a file out of and back into the workspace. On macOS and Unix, files with
+other metadata that cannot be preserved open read-only.
+Choose **Edit anyway…** to review the affected metadata, then **Accept loss and
+edit** to permit its removal when this file is saved (including autosave). Cancel
+keeps it read-only. Approval applies only to the open file and expires if its
+metadata changes; the warning disappears immediately after approval. Content
+conflicts and other read-only restrictions remain protected.
+
 Folders begin restricted: browsing and read-only inspection are available; saves, Git and new shell execution require explicit trust. Trust is tied to native folder identity. Settings locates an absolute Git executable independently of PATH. Git is separately installed and never downloaded by this app.
 
 The default layout has Explorer on the left, a vertical Git pane on the right, and a dedicated Terminal below the editor. Drag a pane header onto an edge target, or use its three-dot menu to dock left/right/top/bottom or beside another pane. Explorer, both editor groups, Git, Terminal and Output can all move and resize. The Workspace layout button shows hidden panes and resets positions. Visible panes, their positions and divider sizes are saved per project. Moving a pane preserves the editor and running PTYs. Hovering a divider shows its resize cursor locally. A drag keeps that cursor only until release or cancellation (including Escape or app focus loss); ordinary editor text selection remains independent.
 
 Use **New** for a file/folder and **Actions** for Rename, Move, Delete or selecting a Git repository. Right-click an entry or press Shift+F10 for its context menu. Click a folder arrow to expand/collapse it; double-clicking the folder also toggles it. New items are created in the selected folder or the selected file’s parent; a new file opens for editing. Duplicate names remain in the dialog for correction, with no overwrite.
+
+In Explorer, single-click to select a file and double-click to open it. Enter
+opens the focused file. Selection and dragging leave closed files closed.
 
 Right-click an editor tab to close it, the tabs to its left/right, or the other
 tabs. Unsaved changes retain the normal Save/Discard/Cancel decision; Cancel
@@ -116,7 +137,9 @@ operations keep their existing submission guard.
 
 If the original project folder moves on the same volume, choose Locate when opening its missing recent entry, or use Locate moved project folder in the command palette. The native folder identity must match; an unrelated folder or copy is refused. Verified relocation preserves scope, trust, recovery, layout and live editor/PTY sessions. Cross-volume moves require a new project scope.
 
-Launching the executable with a folder path (or `-- <folder>` for a leading hyphen) offers it in the existing window. Relative paths use the caller’s working directory. macOS Open With folder events use the same offer. Pending trust/save/credential dialogs finish first; project switching still requires explicit dirty-file and terminal decisions.
+Choose **File → New Window** or use **Cmd+Option+Shift+N / Ctrl+Alt+Shift+N** to open another project window. The shortcut is configurable in Settings. Opening a folder from an existing project offers **New window** (the default) or **This window**. Each window has independent editors, panels and terminals; opening a folder already in use focuses its window. Preferences and recent projects are shared. Closing a window saves/reviews its files and jobs; quitting reviews all remaining project windows in turn. Updates require closing other windows first.
+
+Launching the executable with a folder path (or `-- <folder>` for a leading hyphen) offers it in a separate project window, reusing an empty welcome window when available. Relative paths use the caller’s working directory. macOS Open With folder events use the same offer. Pending trust/save/credential dialogs finish first; replacing a project in the same window still requires explicit dirty-file and terminal decisions.
 
 Open Terminal and press **+** for a new shell. Tabs and controls share the single title row. The **⌄ Terminal actions** menu contains Split right/down, Maximize/Restore, Rename, Select all, Copy/Paste and Terminate/Close. Press **× beside a terminal tab** to close that tab and all its splits, after confirming termination of its owned sessions. Other tabs keep running. A split’s close button appears on hover or keyboard focus; Close tab and the selected-pane termination action also remain in the menu. The tool-window × hides Terminal and keeps sessions running. Double-click the active tab to rename it; use arrow keys in the tab strip to switch tabs. Each tab or split has an independent native PTY. Drag split dividers to resize. Search opens with the magnifier or Cmd+F on macOS / Ctrl+Shift+F elsewhere; Enter and Shift+Enter find next/previous, and Escape closes search and returns typing to the shell. Search overlays the content and never takes a permanent row. Ended-session status appears only when relevant. Closing an owned session still confirms termination of any remaining jobs. Configure a shell's absolute path, argument lines, font and scrollback in Settings. The default shell follows COMSPEC on Windows and SHELL or the account's configured shell on Unix. macOS starts the default shell as a login shell so GUI launches load your normal shell profile and CLI PATH. An explicit shell/argument configuration is used exactly as entered. Commands execute only when you type or paste them.
 

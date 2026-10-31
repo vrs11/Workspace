@@ -16,6 +16,7 @@ const doc = (): DocMeta => ({
   baseline: "one",
   revision: 0,
   readonly: null,
+  metadata: null,
   size: 0,
   dirty: false,
   recovering: false,
@@ -33,6 +34,8 @@ afterEach(() => {
     cursor: "",
     tabs: [],
     busy: 0,
+    notice: "",
+    noticeDetails: null,
   });
 });
 it("updates visible cursor/recovery counters without rendering the workspace on each editor event", () => {
@@ -123,5 +126,34 @@ it("keeps operation progress local while preserving busy-control updates", () =>
       busy > 0,
     );
   }
+  expect(renders).toBe(before);
+});
+
+it("updates notification subscribers without rendering or persisting the workspace", () => {
+  let renders = 0;
+  function Workspace() {
+    useApp(useShallow(workspaceSnapshot));
+    renders++;
+    return <div>Workspace</div>;
+  }
+  function Notification() {
+    return <output>{useApp((state) => state.notice)}</output>;
+  }
+  render(
+    <>
+      <Workspace />
+      <Notification />
+    </>,
+  );
+  const before = renders;
+  act(() => useApp.getState().set({ notice: "Files moved" }));
+  expect(screen.getByRole("status")).toHaveTextContent("Files moved");
+  act(() =>
+    useApp.getState().set({
+      notice: "Couldn't move file",
+      noticeDetails: { code: "permissionDenied" },
+    }),
+  );
+  expect(screen.getByRole("status")).toHaveTextContent("Couldn't move file");
   expect(renders).toBe(before);
 });

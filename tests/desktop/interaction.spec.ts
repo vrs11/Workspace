@@ -43,7 +43,7 @@ describe("quick file navigation and keyboard dialog choices", () => {
     await $('[role="dialog"] button.primary').waitForDisplayed();
     await key("Enter");
     await $('.tree-label[title="hello.ts"]').waitForDisplayed();
-    await $('.tree-label[title="hello.ts"]').click();
+    await $('.tree-label[title="hello.ts"]').doubleClick();
     await $(".editor-surface textarea.inputarea").waitForExist();
     const path =
       "/assets/" +

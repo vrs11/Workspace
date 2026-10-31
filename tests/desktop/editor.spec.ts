@@ -178,7 +178,7 @@ describe("native search, multicursor and IntelliJ-style autosave", () => {
     await $('[role="dialog"] button.primary').waitForDisplayed();
     await $('[role="dialog"] button.primary').click();
     await $('.tree-label[title="multi.txt"]').waitForDisplayed();
-    await $('.tree-label[title="multi.txt"]').click();
+    await $('.tree-label[title="multi.txt"]').doubleClick();
     await $(input).waitForExist();
     await openFind();
     await $(".find-widget.visible .monaco-findInput textarea").setValue(
@@ -366,7 +366,7 @@ describe("native search, multicursor and IntelliJ-style autosave", () => {
     await $("button=Save autosave preferences").click();
     await $('[aria-label="Close settings"]').click();
     await $('[aria-label="Project files"]').click();
-    await $('.tree-label[title="multi.txt"]').click();
+    await $('.tree-label[title="multi.txt"]').doubleClick();
     await $(input).waitForExist();
     await paste("// terminal focus\n");
     await $('button[aria-label="New terminal"]').click();
@@ -387,7 +387,7 @@ describe("native search, multicursor and IntelliJ-style autosave", () => {
     await browser.waitUntil(() =>
       readFileSync(path, "utf8").includes("close saves"),
     );
-    await $('.tree-label[title="multi.txt"]').click();
+    await $('.tree-label[title="multi.txt"]').doubleClick();
     await $(input).waitForExist();
     await paste("// unsaved local\n");
     writeFileSync(path, "external version\n");

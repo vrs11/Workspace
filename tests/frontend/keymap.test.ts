@@ -96,6 +96,46 @@ it("publishes unique command IDs and keeps platform defaults populated", () => {
   spy.mockRestore();
 });
 it.each(["MacIntel", "Linux x86_64"])(
+  "routes New Window from the media view and preserves terminal Rename on %s",
+  (platform) => {
+    const spy = vi
+      .spyOn(navigator, "platform", "get")
+      .mockReturnValue(platform);
+    document.body.innerHTML =
+      '<div class="media-preview" tabindex="0"></div><div class="terminal-panel"><textarea></textarea></div>';
+    const commands: string[] = [];
+    const callback = (event: Event) => {
+      event.preventDefault();
+      commands.push((event as CustomEvent<string>).detail);
+    };
+    window.addEventListener("workspace-command", callback);
+    const dispose = installShortcutRouter();
+    try {
+      const press = (target: Element, shiftKey: boolean) => {
+        const event = new KeyboardEvent("keydown", {
+          key: "n",
+          code: "KeyN",
+          metaKey: platform === "MacIntel",
+          ctrlKey: platform !== "MacIntel",
+          altKey: true,
+          shiftKey,
+          bubbles: true,
+          cancelable: true,
+        });
+        target.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+      };
+      press(document.querySelector(".media-preview")!, true);
+      press(document.querySelector("textarea")!, false);
+      expect(commands).toEqual(["app.newWindow", "terminal.rename"]);
+    } finally {
+      dispose();
+      window.removeEventListener("workspace-command", callback);
+      spy.mockRestore();
+    }
+  },
+);
+it.each(["MacIntel", "Linux x86_64"])(
   "keeps only Double Shift for Quick open on %s and releases the old shortcut",
   (platform) => {
     const spy = vi

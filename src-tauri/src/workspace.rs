@@ -22,6 +22,7 @@ pub struct Workspace {
     pub dir: Dir,
     pub entries: HashMap<String, PathBuf>,
     pub documents: HashMap<String, DocumentState>,
+    pub external_files: HashMap<String, crate::external_files::ExternalFile>,
     pub media: crate::media::Previews,
     pub refreshes: HashMap<String, crate::documents::RefreshSnapshot>,
     pub activity: Arc<AtomicU8>,
@@ -29,6 +30,7 @@ pub struct Workspace {
     pub repository: Option<PathBuf>,
     pub diffs: HashMap<String, crate::git::DiffSnapshot>,
     pub replacements: HashMap<String, crate::search::Replacement>,
+    pub(crate) delete_reviews: crate::files::DeleteReviews,
 }
 impl Workspace {
     pub fn open(path: &Path, recent: &[Project]) -> Result<Self> {
@@ -81,6 +83,7 @@ impl Workspace {
             dir,
             entries: HashMap::new(),
             documents: HashMap::new(),
+            external_files: HashMap::new(),
             media: HashMap::new(),
             refreshes: HashMap::new(),
             activity: Arc::new(AtomicU8::new(0)),
@@ -88,6 +91,7 @@ impl Workspace {
             repository: None,
             diffs: HashMap::new(),
             replacements: HashMap::new(),
+            delete_reviews: Default::default(),
         })
     }
     pub fn relocated(path: &Path, previous: &Project) -> Result<Self> {
@@ -125,7 +129,7 @@ impl Workspace {
         if mutation && self.activity.load(std::sync::atomic::Ordering::SeqCst) != 0 {
             return Err(AppError::new(
                 "workspaceBusy",
-                "An application update is in progress; wait before changing project state",
+                "Another file operation or application update is in progress; wait before changing project state",
             ));
         }
         Ok(())

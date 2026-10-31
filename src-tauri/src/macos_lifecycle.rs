@@ -23,8 +23,8 @@ extern "C-unwind" fn should_terminate(
     std::panic::catch_unwind(|| {
         if let Some(app) = APPLICATION.get() {
             if app
-                .try_state::<crate::AppState>()
-                .is_some_and(|state| state.closing.load(std::sync::atomic::Ordering::SeqCst))
+                .try_state::<crate::windows::Windows>()
+                .is_some_and(|state| state.exit_allowed())
             {
                 return 1; // NSTerminateNow, after safe-close acknowledgement
             }

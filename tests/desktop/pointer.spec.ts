@@ -53,7 +53,7 @@ describe("native pointer hit testing, cursor restoration and focus isolation", (
     await $('[role="dialog"] button.primary').waitForDisplayed();
     await $('[role="dialog"] button.primary').click();
     await $('.tree-label[title="hello.ts"]').waitForDisplayed();
-    await $('.tree-label[title="hello.ts"]').click();
+    await $('.tree-label[title="hello.ts"]').doubleClick();
     await $(".monaco-editor textarea.inputarea").waitForExist();
     await browser.execute(async (path) => {
       (window as unknown as ProbeWindow).pointerMonaco = (

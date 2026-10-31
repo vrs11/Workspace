@@ -1,8 +1,12 @@
 import { useShallow } from "zustand/react/shallow";
 import workspaceIcon from "../assets/workspace-icon.png";
+import workspaceIcon1x from "../assets/workspace-icon@1x.png";
+import workspaceIcon3x from "../assets/workspace-icon@3x.png";
 import { installViewResources } from "../features/workspace/viewResources";
+import { chooseCurrentWindow } from "../features/workspace/projectWindow";
 import StatusBar from "./StatusBar";
 import { EditorTabs } from "../features/editor/EditorTabs";
+import { MetadataWarning } from "../features/editor/MetadataWarning";
 import { createTabCloser } from "../features/editor/tabActions";
 import {
   workspaceSnapshot,
@@ -20,7 +24,6 @@ import {
   useRef,
   lazy,
   Suspense,
-  type DragEvent,
   type ComponentProps,
 } from "react";
 
@@ -42,7 +45,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useApp, perform, notice } from "../shared/state/store";
 import { call, rpc, subscribe, errorText } from "../shared/ipc/client";
 import { coalesceRefresh } from "../shared/state/refresh";
-import { ErrorDetails } from "../shared/components/ErrorDetails";
+import { NotificationToast } from "../shared/components/NotificationToast";
 import {
   DialogHost,
   ask,
@@ -66,10 +69,13 @@ import {
   persistenceWarning,
 } from "../features/workspace/persistence";
 import type { DockLayout, DockPanel, Project } from "../generated/protocol";
-import { fileDragMime, readFileDrag } from "../features/explorer/fileDrag";
+import { installFileDrops } from "../features/explorer/fileDrag";
 import SearchPanel from "../features/search/SearchPanel";
 const SettingsPanel = lazy(() => import("../features/settings/Settings"));
-import { installAutoSave, flushAutoSave } from "../features/editor/autosave";
+import {
+  installAutoSave,
+  flushConfiguredAutoSave,
+} from "../features/editor/autosave";
 import {
   loadDocument,
   saveAll,
@@ -92,6 +98,26 @@ function RepairPreferencesButton(props: ComponentProps<"button">) {
   const busy = useApp((s) => s.busy > 0);
   return <button {...props} disabled={busy} />;
 }
+function OperationOutput() {
+  const message = useApp((state) => state.notice);
+  return (
+    <div className="output-panel">
+      <button
+        onClick={() =>
+          void perform(async () =>
+            notice((await call({ type: "diagnostics" }, "text")).text),
+          )
+        }
+      >
+        Preview diagnostics
+      </button>
+      <p>
+        {message ||
+          "Operation results and errors appear here. Terminal transcripts are not persisted."}
+      </p>
+    </div>
+  );
+}
 export default function App() {
   const [dock, setDock] = useState<DockLayout>(defaultDock);
   const [explorerSearch, setExplorerSearch] = useState(false);
@@ -107,23 +133,6 @@ export default function App() {
   const closePending = useRef(false);
   const state = useApp(useShallow(workspaceSnapshot));
   const activeDoc = useApp(useShallow(activeDocumentUi));
-  const acceptEditorDrop = useCallback((event: DragEvent) => {
-    const project = useApp.getState().project;
-    if (!project || !event.dataTransfer.types.includes(fileDragMime)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const entry = readFileDrag(
-      event.dataTransfer.getData(fileDragMime),
-      project.id,
-    );
-    if (entry?.kind === "file") void perform(() => loadDocument(entry.id));
-  }, []);
-  const allowEditorDrop = useCallback((event: DragEvent) => {
-    if (event.dataTransfer.types.includes(fileDragMime)) {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "link";
-    }
-  }, []);
   const settingsReady = !!state.settings;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [startupIssue, setStartupIssue] = useState<string | null>(null);
@@ -137,7 +146,15 @@ export default function App() {
   const [terminalMounted, setTerminalMounted] = useState(false);
   const [layout, setLayout] = useState<number[]>([22, 78, 68, 32, 50, 50]);
   const openProject = useCallback(async (path?: string, resume = false) => {
-    await flushAutoSave(true);
+    if (resume && !path) path = useApp.getState().project?.root;
+    if (!path) path = (await call({ type: "pickFolder" }, "text")).text;
+    if (!path) return;
+    if (
+      !resume &&
+      !(await chooseCurrentWindow(path, !!useApp.getState().project))
+    )
+      return;
+    await flushConfiguredAutoSave();
     const current = useApp.getState();
     if (Object.values(current.docs).some((d) => d.dirty)) {
       if (
@@ -151,9 +168,6 @@ export default function App() {
         return;
       await saveAll();
     }
-    if (resume && !path) path = current.project?.root;
-    if (!path) path = (await call({ type: "pickFolder" }, "text")).text;
-    if (!path) return;
     if (current.project && !resume) {
       const { terminals } = await call(
         { type: "terminalList", scope: current.project.id },
@@ -184,9 +198,18 @@ export default function App() {
     restoring.current = true;
     let project: Project;
     try {
-      project = resume
-        ? (await call({ type: "bootstrap" }, "bootstrap")).project!
-        : (await call({ type: "openProject", path }, "project")).project;
+      if (resume)
+        project = (await call({ type: "bootstrap" }, "bootstrap")).project!;
+      else {
+        const result = await rpc({ type: "openProject", path });
+        if (result.type === "windowOpened") {
+          restoring.current = false;
+          return;
+        }
+        if (result.type !== "project")
+          throw new Error("Expected an opened project");
+        project = result.project;
+      }
     } catch (error) {
       restoring.current = false;
       const previous = current.settings?.recent.find(
@@ -316,6 +339,49 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
+    let disposed = false;
+    const stop = installFileDrops((drop) => {
+      void perform(async () => {
+        const initial = useApp.getState().project?.id;
+        if (drop.drag) {
+          if (drop.drag.scope !== initial) return;
+          for (const entry of drop.drag.entries) {
+            if (useApp.getState().project?.id !== initial) return;
+            if (entry.kind === "file") await loadDocument(entry.id);
+          }
+          return;
+        }
+        if (!drop.offer) return;
+        if (!initial && drop.folder) await openProject(drop.folder);
+        const scope = useApp.getState().project?.id;
+        if (!scope || (initial && scope !== initial)) return;
+        const result = await call(
+          { type: "openDroppedFiles", scope, offer: drop.offer },
+          "fileDrop",
+        );
+        const errors = [...result.errors];
+        for (const entry of result.entries) {
+          if (useApp.getState().project?.id !== scope) return;
+          try {
+            await loadDocument(entry.id);
+          } catch (error) {
+            errors.push(`${entry.name}: ${errorText(error)}`);
+          }
+        }
+        if (errors.length) notice(errors.join("\n"));
+      });
+    });
+    void stop
+      .then((unsubscribe) => {
+        if (disposed) unsubscribe();
+      })
+      .catch((error) => notice(errorText(error)));
+    return () => {
+      disposed = true;
+      void stop.then((unsubscribe) => unsubscribe()).catch(() => {});
+    };
+  }, [openProject]);
+  useEffect(() => {
     void perform(async () => {
       try {
         const r = await call({ type: "bootstrap" }, "bootstrap");
@@ -393,6 +459,43 @@ export default function App() {
     document.documentElement.dataset.theme = state.settings?.theme ?? "dark";
   }, [state.settings?.theme]);
   useEffect(() => installAutoSave(), []);
+  useEffect(() => {
+    let disposed = false;
+    let preferenceGeneration = -1,
+      ticket = 0;
+    const stops: Array<() => void> = [];
+    const watch = async (pending: Promise<() => void>) => {
+      try {
+        const stop = await pending;
+        if (disposed) stop();
+        else stops.push(stop);
+      } catch (error) {
+        if (!disposed) notice(errorText(error));
+      }
+    };
+    void watch(
+      listen<number>("preferences-changed", ({ payload }) => {
+        if (payload <= preferenceGeneration) return;
+        preferenceGeneration = payload;
+        const current = ++ticket;
+        void perform(async () => {
+          const result = await call({ type: "bootstrap" }, "bootstrap");
+          if (disposed || current !== ticket) return;
+          useApp.getState().set({ settings: result.settings });
+          setStartupIssue(result.startup_issue);
+        });
+      }),
+    );
+    void watch(
+      listen<string>("workspace-notice", ({ payload }) => {
+        if (!disposed) notice(payload);
+      }),
+    );
+    return () => {
+      disposed = true;
+      stops.forEach((stop) => stop());
+    };
+  }, []);
   useEffect(() => installViewResources(), []);
   useEffect(() => {
     if (!state.project) return;
@@ -404,17 +507,18 @@ export default function App() {
         if (closePending.current) return;
         closePending.current = true;
         void perform(async () => {
+          let completed = false;
           try {
             await waitForDialogIdle();
-            await flushAutoSave(true);
+            await flushConfiguredAutoSave();
             const s = useApp.getState();
             let decision: string | null = null;
             if (Object.values(s.docs).some((d) => d.dirty)) {
               decision = await askWhenIdle({
-                title: "Unsaved changes before quitting",
+                title: "Unsaved changes before closing this window",
                 description:
                   "Save all open changes, discard all unsaved editor changes, or cancel to keep working.",
-                choices: ["Save all and quit", "Discard unsaved changes"],
+                choices: ["Save all and close", "Discard unsaved changes"],
               });
               if (!decision) return;
             }
@@ -426,13 +530,13 @@ export default function App() {
               if (
                 terminals.length &&
                 !(await askWhenIdle({
-                  title: "Terminate terminals and quit",
+                  title: "Close this window and its terminals",
                   description: `Stop ${terminals.length} shell(s) and their owned jobs? Commands are not restarted when you reopen.`,
-                  choices: ["Terminate and quit"],
+                  choices: ["Terminate and close"],
                 }))
               )
                 return;
-              if (decision === "Save all and quit") await saveAll();
+              if (decision === "Save all and close") await saveAll();
               else if (decision === "Discard unsaved changes")
                 for (const id of models.keys())
                   await rpc({
@@ -450,7 +554,9 @@ export default function App() {
             if (s.project) await flushWorkspacePersistence(s.project.id);
             await waitForDialogIdle();
             await rpc({ type: "finishClose" });
+            completed = true;
           } finally {
+            if (!completed) await rpc({ type: "cancelClose" }).catch(() => {});
             closePending.current = false;
           }
         });
@@ -621,6 +727,14 @@ export default function App() {
         case "app.openFolder":
           void perform(() => openProject());
           break;
+        case "app.newWindow":
+          void perform(() =>
+            call({ type: "newWindow", path: null }, "windowOpened"),
+          );
+          break;
+        case "app.quit":
+          void perform(() => call({ type: "quitApplication" }, "ok"));
+          break;
         case "app.quickOpen":
           openQuickOpen();
           break;
@@ -763,6 +877,14 @@ export default function App() {
       label: `Open folder · ${shortcutLabel("app.openFolder")}`,
       run: () => openProject(),
     },
+    {
+      label: `New window · ${shortcutLabel("app.newWindow")}`,
+      run: () => call({ type: "newWindow", path: null }, "windowOpened"),
+    },
+    {
+      label: "Quit Workspace",
+      run: () => call({ type: "quitApplication" }, "ok"),
+    },
     { label: `Save all · ${shortcutLabel("app.saveAll")}`, run: saveAll },
     {
       label: `Reopen closed tab · ${shortcutLabel("app.reopenTab")}`,
@@ -826,7 +948,7 @@ export default function App() {
           preferences and remembered trust, while keeping editor recovery and
           project files.
         </p>
-        {state.notice && <p role="alert">{state.notice}</p>}
+        <NotificationToast />
         <div className="toolbar">
           {[true, false].map((restore) => (
             <RepairPreferencesButton
@@ -873,13 +995,12 @@ export default function App() {
           <img
             className="brand-mark"
             src={workspaceIcon}
-            alt=""
+            srcSet={`${workspaceIcon1x} 1x, ${workspaceIcon} 2x, ${workspaceIcon3x} 3x`}
+            alt="Workspace"
             width={24}
             height={24}
             draggable={false}
           />
-          <span>Workspace</span>
-          <small>development</small>
         </div>
         <button onClick={() => void perform(() => openProject())}>
           <FolderOpen size={16} />
@@ -915,18 +1036,7 @@ export default function App() {
           <SettingsIcon size={17} />
         </button>
       </header>
-      {state.notice && (
-        <div className="notice" role="alert">
-          <span>{state.notice}</span>
-          <ErrorDetails details={state.noticeDetails} />
-          <button
-            aria-label="Dismiss notification"
-            onClick={() => state.set({ notice: "" })}
-          >
-            <X size={14} />
-          </button>
-        </div>
-      )}
+      <NotificationToast />
       {state.project && !state.project.trusted && (
         <div className="trust-banner">
           <span>
@@ -1078,11 +1188,7 @@ export default function App() {
                   />
                 ),
                 editor: (
-                  <div
-                    className="editor-area"
-                    onDragOverCapture={allowEditorDrop}
-                    onDropCapture={acceptEditorDrop}
-                  >
+                  <div className="editor-area">
                     <div
                       className="tab-bar"
                       role="tablist"
@@ -1176,7 +1282,13 @@ export default function App() {
                         </button>
                       </div>
                     )}
-                    {activeDoc?.readonly && (
+                    {activeDoc?.metadata && (
+                      <MetadataWarning
+                        key={activeDoc.id}
+                        document={activeDoc}
+                      />
+                    )}
+                    {activeDoc?.readonly && !activeDoc.metadata && (
                       <div className="editor-warning">{activeDoc.readonly}</div>
                     )}
                     {activeDoc?.recovering && (
@@ -1338,11 +1450,7 @@ export default function App() {
                   </div>
                 ),
                 editorSecondary: state.split ? (
-                  <div
-                    className="split-editor"
-                    onDragOverCapture={allowEditorDrop}
-                    onDropCapture={acceptEditorDrop}
-                  >
+                  <div className="split-editor">
                     <div className="toolbar">
                       <label>
                         Second editor
@@ -1378,25 +1486,7 @@ export default function App() {
                     <Terminal key={state.project.id} />
                   </Suspense>
                 ) : null,
-                output: (
-                  <div className="output-panel">
-                    <button
-                      onClick={() =>
-                        void perform(async () =>
-                          notice(
-                            (await call({ type: "diagnostics" }, "text")).text,
-                          ),
-                        )
-                      }
-                    >
-                      Preview diagnostics
-                    </button>
-                    <p>
-                      {state.notice ||
-                        "Operation results and errors appear here. Terminal transcripts are not persisted."}
-                    </p>
-                  </div>
-                ),
+                output: <OperationOutput />,
               }}
             />
           )}

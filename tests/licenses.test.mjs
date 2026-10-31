@@ -32,6 +32,10 @@ function fixture() {
   }
   copyFileSync("rust-toolchain.toml", join(root, "rust-toolchain.toml"));
   copyFileSync(
+    "scripts/license-notices.mjs",
+    join(root, "scripts/license-notices.mjs"),
+  );
+  copyFileSync(
     "scripts/prepare-licenses.mjs",
     join(root, "scripts/prepare-licenses.mjs"),
   );

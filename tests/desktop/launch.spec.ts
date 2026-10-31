@@ -40,7 +40,7 @@ describe("native folder launch offers", () => {
     await $('[role="dialog"] button.primary').waitForDisplayed();
     await $('[role="dialog"] button.primary').click();
     await $('.explorer [role="treeitem"]').waitForDisplayed();
-    await $('.explorer [role="treeitem"]').click();
+    await $('.explorer [role="treeitem"]').doubleClick();
     await $(".monaco-editor textarea.inputarea").waitForExist();
     await browser.execute(() => {
       const input = document.querySelector<HTMLTextAreaElement>(

@@ -4,6 +4,14 @@ import { saveDocument } from "./models";
 const failed = new Map<string, { revision: number; baseline: string }>();
 let flushing: Promise<void> | null = null;
 
+/** Lifecycle actions flush configured autosave without enabling it implicitly. */
+export function flushConfiguredAutoSave(): Promise<void> {
+  const settings = useApp.getState().settings;
+  return settings?.autoSaveIdle || settings?.autoSaveOnFocusLoss
+    ? flushAutoSave(true)
+    : Promise.resolve();
+}
+
 export function flushAutoSave(explicitAction = false): Promise<void> {
   if (flushing) return flushing;
   const state = useApp.getState();

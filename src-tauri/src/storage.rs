@@ -8,6 +8,7 @@ use std::{
 
 pub struct Storage {
     pub root: PathBuf,
+    pub(crate) recovery_gate: std::sync::Arc<std::sync::Mutex<()>>,
 }
 impl Storage {
     pub fn new(root: PathBuf) -> Result<Self> {
@@ -17,7 +18,10 @@ impl Storage {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
         }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            recovery_gate: Default::default(),
+        })
     }
     pub fn read<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
         let path = self.root.join(name);

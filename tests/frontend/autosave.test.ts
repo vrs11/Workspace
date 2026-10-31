@@ -4,6 +4,7 @@ import { saveDocument } from "../../src/features/editor/models";
 import {
   installAutoSave,
   flushAutoSave,
+  flushConfiguredAutoSave,
 } from "../../src/features/editor/autosave";
 vi.mock("../../src/features/editor/models", () => ({ saveDocument: vi.fn() }));
 let cleanup: () => void;
@@ -16,6 +17,7 @@ const doc: DocMeta = {
   encoding: "utf8",
   eol: "lf",
   readonly: null,
+  metadata: null,
   size: 3,
   revision: 1,
   dirty: true,
@@ -84,6 +86,26 @@ it("saves after idle time, resets on activity, and saves when entering the termi
   await flushAutoSave();
   expect(saveDocument).toHaveBeenCalledTimes(2);
 });
+it.each([
+  [false, false, false],
+  [true, false, true],
+  [false, true, true],
+])(
+  "lifecycle flushing respects idle=%s and focus=%s autosave settings",
+  async (autoSaveIdle, autoSaveOnFocusLoss, saves) => {
+    useApp.getState().set({
+      busy: 1,
+      settings: {
+        ...useApp.getState().settings!,
+        autoSaveIdle,
+        autoSaveOnFocusLoss,
+      },
+    });
+    await flushConfiguredAutoSave();
+    expect(saveDocument).toHaveBeenCalledTimes(saves ? 1 : 0);
+    expect(useApp.getState().docs.a.dirty).toBe(!saves);
+  },
+);
 it("does not repeatedly retry an automatic write failure and keeps the error visible", async () => {
   vi.mocked(saveDocument).mockImplementation(async (id) => {
     useApp.getState().doc(id, { saveError: "Disk full" });

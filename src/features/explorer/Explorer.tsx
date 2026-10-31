@@ -15,20 +15,34 @@ import {
 import type { Entry } from "../../generated/protocol";
 import { call, rpc } from "../../shared/ipc/client";
 import { useApp, perform, notice } from "../../shared/state/store";
-import { fileDragMime, readFileDrag } from "./fileDrag";
-import type { DragEvent } from "react";
+import { armFileDrag, startFileDrag, type FileDrop } from "./fileDrag";
+import {
+  selectEntries,
+  selectionRoots,
+  type TreeSelection,
+  type SelectionGesture,
+} from "./selection";
+import { errorText } from "../../shared/ipc/client";
 import { VirtualList } from "../../shared/components/VirtualList";
 import { ask } from "../../shared/components/Dialog";
 import { FilePathMenuItems } from "../../shared/components/FilePathMenu";
 import { activeFileEntry, tabEntry } from "../../shared/fileTargets";
 import { closeAffectedEntry } from "./closeAffected";
+import { deleteEntry } from "./deleteEntry";
 import { useDockVisible } from "../workspace/DockWorkspace";
 import {
   useGitDecorations,
   gitLabels,
   decorationLabel,
 } from "./gitDecorations";
-import { loadDocument } from "../editor/models";
+import { loadDocument, settleModelLoads } from "../editor/models";
+function isOpenFile(entry: string) {
+  const state = useApp.getState();
+  return (
+    !!state.docs[entry] ||
+    state.tabs.some((tab) => tab.kind === "media" && tab.entry === entry)
+  );
+}
 function Explorer({ active = true }: { active?: boolean }) {
   const visible = useDockVisible();
   const project = useApp((s) => s.project);
@@ -65,12 +79,37 @@ function Explorer({ active = true }: { active?: boolean }) {
     }));
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
-  const [selected, setSelected] = useState<Entry | null>(null);
+  const [selected, setPrimary] = useState<Entry | null>(null);
+  const [selection, setSelection] = useState<TreeSelection>({
+    ids: new Set(),
+    anchor: null,
+  });
+  const userSelection = useRef(0);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const setSelected = (entry: Entry | null) => {
+    setPrimary(entry);
+    const next = {
+      ids: new Set(entry ? [entry.id] : []),
+      anchor: entry?.id ?? null,
+    };
+    selectionRef.current = next;
+    setSelection(next);
+  };
+  const pending = useRef(false);
+  const cancelArm = useRef<(() => void) | null>(null);
+  const suppressClick = useRef(false);
   const [context, setContext] = useState<{ x: number; y: number } | null>(null);
-  const dragging = useRef<Entry | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const hoverTarget = useRef<string | null>(null);
   const hover = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(hover.current), []);
+  useEffect(
+    () => () => {
+      clearTimeout(hover.current);
+      cancelArm.current?.();
+    },
+    [],
+  );
   const load = useCallback(
     async (parent: string | null) => {
       if (!project || useApp.getState().project?.id !== project.id) return;
@@ -90,6 +129,7 @@ function Explorer({ active = true }: { active?: boolean }) {
   );
   useEffect(() => {
     setChildren({});
+    cancelArm.current?.();
     setSelected(null);
     void perform(async () => {
       await load(null);
@@ -139,6 +179,28 @@ function Explorer({ active = true }: { active?: boolean }) {
     return { rows, parents, paths };
   }, [children, expanded]);
   const entries = useMemo(() => Object.values(children).flat(), [children]);
+  const rowEntries = useMemo(() => rows.map((row) => row.entry), [rows]);
+  const selectedEntries = entries.filter((entry) =>
+    selection.ids.has(entry.id),
+  );
+  function select(entry: Entry, gesture: SelectionGesture) {
+    userSelection.current++;
+    cancelReveal();
+    const next = selectEntries(
+      selectionRef.current,
+      rowEntries,
+      entry.id,
+      gesture,
+    );
+    selectionRef.current = next;
+    setSelection(next);
+    setPrimary(
+      next.ids.has(entry.id)
+        ? entry
+        : (entries.find((item) => next.ids.has(item.id)) ?? null),
+    );
+  }
+  const plain = { shiftKey: false, metaKey: false, ctrlKey: false };
   const [visibleEntries, setVisibleEntries] = useState<Entry[]>([]);
   const showEntries = useCallback((rows: { entry: Entry }[]) => {
     const next = rows.map((row) => row.entry);
@@ -298,6 +360,13 @@ function Explorer({ active = true }: { active?: boolean }) {
       if (!choice) return;
       target =
         directories.find((r) => r.entry.path === choice)?.entry.id ?? null;
+      if (selectedEntries.length > 1) {
+        await moveEntries(
+          selectedEntries,
+          entries.find((entry) => entry.id === target) ?? null,
+        );
+        return;
+      }
     } else {
       const found = Object.entries(children).find(([, entries]) =>
         entries.some((e) => e.id === selected.id),
@@ -329,7 +398,10 @@ function Explorer({ active = true }: { active?: boolean }) {
           );
       },
     });
-    if (!name || !(await closeAffected(selected))) return;
+    if (!name) return;
+    await settleModelLoads();
+    const reopen = isOpenFile(selected.id);
+    if (!(await closeAffected(selected))) return;
     const result = await call(
       {
         type: "rename",
@@ -342,142 +414,314 @@ function Explorer({ active = true }: { active?: boolean }) {
     );
     const moved = result.entries.find((e) => e.name === name);
     setSelected(moved ?? null);
-    if (selected.kind === "file" && moved) await loadDocument(moved.id);
+    if (reopen && selected.kind === "file" && moved)
+      await loadDocument(moved.id);
     setChildren({});
     setExpanded(new Set());
     await load(null);
   }
-  function dragOver(event: DragEvent, destination: Entry | null) {
-    if (!dragging.current || (destination && destination.kind !== "directory"))
-      return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = "move";
-    const target = destination?.id ?? "root";
-    if (dropTarget !== target) {
-      setDropTarget(target);
+  function pruneEntries(targets: Entry[]) {
+    const separator = navigator.platform.includes("Win") ? "\\" : "/";
+    const removed = new Set(
+      Object.values(childrenRef.current)
+        .flat()
+        .filter((entry) =>
+          targets.some(
+            (target) =>
+              entry.id === target.id ||
+              (target.kind === "directory" &&
+                entry.path.startsWith(target.path + separator)),
+          ),
+        )
+        .map((entry) => entry.id),
+    );
+    setChildren((old) =>
+      Object.fromEntries(
+        Object.entries(old)
+          .filter(([parent]) => !removed.has(parent))
+          .map(([parent, entries]) => [
+            parent,
+            entries.filter((entry) => !removed.has(entry.id)),
+          ]),
+      ),
+    );
+    setExpanded((old) => new Set([...old].filter((id) => !removed.has(id))));
+    const ids = new Set(
+      [...selectionRef.current.ids].filter((id) => !removed.has(id)),
+    );
+    const next = {
+      ids,
+      anchor: ids.has(selectionRef.current.anchor ?? "")
+        ? selectionRef.current.anchor
+        : (ids.values().next().value ?? null),
+    };
+    selectionRef.current = next;
+    setSelection(next);
+    setPrimary((old) => (old && !removed.has(old.id) ? old : null));
+  }
+  async function moveEntries(sources: Entry[], destination: Entry | null) {
+    if (!project || pending.current) return;
+    const scope = project.id,
+      parent = destination?.id ?? null;
+    if (!project.trusted)
+      throw new Error("Trust the workspace before moving files.");
+    const separator = navigator.platform.includes("Win") ? "\\" : "/";
+    const targets = selectionRoots(sources).filter(
+      (entry) => (parents.get(entry.id) ?? "root") !== (parent ?? "root"),
+    );
+    if (!targets.length) return;
+    if (
+      targets.some(
+        (entry) =>
+          entry.id === parent ||
+          (entry.kind === "directory" &&
+            destination?.path.startsWith(entry.path + separator)),
+      )
+    )
+      throw new Error("A folder cannot be moved inside itself.");
+    pending.current = true;
+    const completed: Entry[] = [];
+    try {
+      // Check every collision before closing editors or moving the first item.
+      const { entries: existing } = await call(
+        { type: "list", scope, parent },
+        "entries",
+      );
+      const names = new Set(existing.map((entry) => entry.name));
+      for (const target of targets) {
+        if (names.has(target.name))
+          throw {
+            code: "alreadyExists",
+            message: `“${destination ? destination.path + separator : ""}${target.name}” already exists in the destination folder. Choose another folder.`,
+          };
+        names.add(target.name);
+      }
+      await settleModelLoads();
+      const open = new Set(
+        targets
+          .filter((target) => isOpenFile(target.id))
+          .map((target) => target.id),
+      );
+      for (const target of targets)
+        if (!(await closeAffectedEntry(scope, target))) return;
+      for (const target of targets) {
+        if (useApp.getState().project?.id !== scope) return;
+        const result = await call(
+          { type: "moveEntry", scope, entry: target.id, parent },
+          "entries",
+        );
+        completed.push(target);
+        pruneEntries([target]);
+        const moved = result.entries.find(
+          (entry) => entry.name === target.name,
+        );
+        if (open.has(target.id) && target.kind === "file" && moved)
+          await loadDocument(moved.id);
+      }
+      if (destination) setExpanded((old) => new Set(old).add(destination.id));
+      notice(
+        `${completed.length} item${completed.length === 1 ? "" : "s"} moved.`,
+      );
+    } catch (error) {
+      if (!completed.length) throw error;
+      throw Object.assign(
+        new Error(
+          `${completed.length} item(s) moved; remaining items were kept. ${errorText(error)}`,
+        ),
+        typeof error === "object" && error !== null ? error : {},
+        {
+          message: `${completed.length} item(s) moved; remaining items were kept. ${errorText(error)}`,
+        },
+      );
+    } finally {
+      pending.current = false;
+      if (completed.length && useApp.getState().project?.id === scope)
+        window.dispatchEvent(new Event("workspace-refresh"));
+    }
+  }
+  async function removeSelected() {
+    if (!project || pending.current) return;
+    const targets = selectionRoots(selectedEntries),
+      scope = project.id;
+    if (!targets.length) return;
+    pending.current = true;
+    const completed: Entry[] = [];
+    let permanent = 0;
+    try {
+      const folder = targets.length === 1 && targets[0].kind === "directory";
+      if (
+        !(await ask({
+          returnFocus: document.querySelector<HTMLElement>(
+            '.explorer [aria-label="Project tree"]',
+          ),
+          title:
+            targets.length > 1
+              ? `Delete ${targets.length} items?`
+              : folder
+                ? "Delete folder and its contents?"
+                : "Delete file?",
+          description: `${targets
+            .slice(0, 12)
+            .map((target) => `“${target.path}”`)
+            .join(
+              "\n",
+            )}${targets.length > 12 ? `\n…and ${targets.length - 12} more items.` : ""}\nItems are retained in private recovery when possible. If recovery is unavailable, you can confirm permanent deletion separately.`,
+          choices: ["Delete"],
+        }))
+      )
+        return;
+      // Resolve all dirty-buffer decisions before deleting anything.
+      for (const target of targets)
+        if (!(await closeAffectedEntry(scope, target))) return;
+      for (const target of targets) {
+        if (useApp.getState().project?.id !== scope) return;
+        const result = await deleteEntry(scope, target);
+        if (useApp.getState().project?.id !== scope) return;
+        if (!result) {
+          if (completed.length)
+            notice(
+              `${completed.length} item(s) deleted; remaining items were kept.`,
+            );
+          return;
+        }
+        if (result === "permanent") permanent++;
+        completed.push(target);
+        pruneEntries([target]);
+      }
+      notice(
+        permanent
+          ? `${completed.length} item(s) deleted; ${permanent} permanently.${permanent < completed.length ? " The other items remain in private recovery." : ""}`
+          : `${completed.length === 1 ? (folder ? "Folder and its contents moved to private recovery." : "File deleted.") : `${completed.length} items deleted.`} Use Restore deleted file or folder to restore them.`,
+      );
+    } catch (error) {
+      if (!completed.length) throw error;
+      throw new Error(
+        `${completed.length} item(s) deleted; remaining items were kept. ${errorText(error)}`,
+        { cause: error },
+      );
+    } finally {
+      pending.current = false;
+      if (completed.length && useApp.getState().project?.id === scope)
+        window.dispatchEvent(new Event("workspace-refresh"));
+    }
+  }
+  useEffect(() => {
+    const targetEntry = (target: Element | null) => {
+      if (!target?.closest(".explorer")) return undefined;
+      const row = target.closest<HTMLElement>("[data-file-entry]");
+      if (!row)
+        return target.closest(".explorer-toolbar, .virtual-list")
+          ? null
+          : undefined;
+      const entry = entries.find((entry) => entry.id === row.dataset.fileEntry);
+      if (!entry) return undefined;
+      if (entry.kind === "directory") return entry;
+      const parentId = parents.get(entry.id);
+      return !parentId || parentId === "root"
+        ? null
+        : entries.find((entry) => entry.id === parentId);
+    };
+    const hoverFiles = (event: Event) => {
+      const detail = (event as CustomEvent<FileDrop>).detail;
+      const destination =
+        detail.drag && detail.drag.scope !== project?.id
+          ? undefined
+          : targetEntry(detail.target);
+      const id = destination === undefined ? null : (destination?.id ?? "root");
+      setDropTarget(id);
+      if (hoverTarget.current === id) return;
+      hoverTarget.current = id;
       clearTimeout(hover.current);
-      if (destination && !expanded.has(destination.id))
+      if (destination && !expandedRef.current.has(destination.id))
         hover.current = setTimeout(
           () =>
             void perform(async () => {
+              if (useApp.getState().project?.id !== project?.id) return;
               await load(destination.id);
               setExpanded((old) => new Set(old).add(destination.id));
             }),
           650,
         );
-    }
-  }
-  function dropEntry(event: DragEvent, destination: Entry | null) {
-    if (!project) return;
-    const payload = readFileDrag(
-      event.dataTransfer.getData(fileDragMime),
-      project.id,
-    );
-    const source = dragging.current;
-    if (!payload || !source || source.id !== payload.id) return;
-    event.preventDefault();
-    event.stopPropagation();
-    dragging.current = null;
-    setDropTarget(null);
-    clearTimeout(hover.current);
-    void perform(async () => {
-      const parent = destination?.id ?? null;
-      const currentParent =
-        Object.entries(children).find(([, entries]) =>
-          entries.some((entry) => entry.id === source.id),
-        )?.[0] ?? "root";
-      if ((parent ?? "root") === currentParent) return;
-      if (
-        source.id === parent ||
-        (source.kind === "directory" &&
-          destination?.path.startsWith(
-            source.path + (navigator.platform.includes("Win") ? "\\" : "/"),
-          ))
-      )
-        throw new Error("A folder cannot be moved inside itself.");
-      const wasOpen = !!useApp.getState().docs[source.id];
-      if (!(await closeAffected(source))) return;
-      const { entries } = await call(
-        { type: "moveEntry", scope: project.id, entry: source.id, parent },
-        "entries",
-      );
-      const moved = entries.find((entry) => entry.name === source.name);
-      const nextExpanded = new Set(expandedRef.current);
-      for (const row of rows)
-        if (
-          row.entry.id === source.id ||
-          row.entry.path.startsWith(
-            source.path + (navigator.platform.includes("Win") ? "\\" : "/"),
-          )
-        )
-          nextExpanded.delete(row.entry.id);
-      if (destination) nextExpanded.add(destination.id);
-      setSelected(moved ?? null);
-      setChildren({});
-      setExpanded(nextExpanded);
-      await load(null);
-      for (const id of nextExpanded) await load(id);
-      if (source.kind === "file" && wasOpen && moved)
-        await loadDocument(moved.id);
-      window.dispatchEvent(new Event("workspace-refresh"));
-    });
-  }
-  async function removeSelected() {
-    if (!project || !selected) return;
-    const target = selected,
-      scope = project.id;
-    if (
-      !(await ask({
-        returnFocus: document.querySelector<HTMLElement>(
-          '.explorer [aria-label="Project tree"]',
-        ),
-        title:
-          target.kind === "directory"
-            ? "Delete folder and its contents?"
-            : "Delete file?",
-        description:
-          target.kind === "directory"
-            ? `Move “${target.path}” and everything inside it to private recovery. Use Restore deleted file or folder to bring it back.`
-            : `Delete “${target.path}”. Files up to 20 MiB are retained in private recovery.`,
-        choices: ["Delete"],
-      }))
-    )
-      return;
-    if (!(await closeAffectedEntry(scope, target))) return;
-    await rpc({ type: "delete", scope, entry: target.id });
-    if (useApp.getState().project?.id !== scope) return;
-    const removed = new Set(
-      entries
-        .filter(
-          (entry) =>
-            entry.id === target.id ||
-            (target.kind === "directory" &&
-              entry.path.startsWith(
-                target.path + (navigator.platform.includes("Win") ? "\\" : "/"),
-              )),
-        )
-        .map((entry) => entry.id),
-    );
-    setSelected(null);
-    setChildren((old) =>
-      Object.fromEntries(
-        Object.entries(old)
-          .filter(([parent]) => !removed.has(parent))
-          .map(([parent, children]) => [
-            parent,
-            children.filter((entry) => !removed.has(entry.id)),
-          ]),
-      ),
-    );
-    setExpanded((old) => new Set([...old].filter((id) => !removed.has(id))));
-    window.dispatchEvent(new Event("workspace-refresh"));
-    notice(
-      target.kind === "directory"
-        ? "Folder and its contents moved to private recovery. Use Restore deleted file or folder to restore it."
-        : "File deleted. Its recovery copy is available in Restore deleted file or folder.",
-    );
-  }
+    };
+    const dropFiles = (event: Event) => {
+      const detail = (event as CustomEvent<FileDrop>).detail;
+      const destination = targetEntry(detail.target);
+      if (destination === undefined) return;
+      clearTimeout(hover.current);
+      setDropTarget(null);
+      if (detail.drag && detail.drag.scope === project?.id)
+        void perform(() => moveEntries(detail.drag!.entries, destination));
+      else if (detail.offer && project)
+        void perform(async () => {
+          if (pending.current) return;
+          pending.current = true;
+          const scope = project.id,
+            selectionTicket = userSelection.current;
+          try {
+            const preview = await call(
+              { type: "inspectDroppedMove", scope, offer: detail.offer! },
+              "entries",
+            );
+            const parent = destination?.id ?? null;
+            const existing = await call(
+              { type: "list", scope, parent },
+              "entries",
+            );
+            for (const entry of selectionRoots(preview.entries))
+              if (
+                existing.entries.some(
+                  (item) => item.name === entry.name && item.id !== entry.id,
+                )
+              )
+                throw {
+                  code: "alreadyExists",
+                  message: `“${entry.name}” already exists in the destination folder. Choose another folder.`,
+                };
+            for (const entry of selectionRoots(preview.entries))
+              if (!(await closeAffectedEntry(scope, entry))) return;
+            const result = await call(
+              {
+                type: "moveDroppedFiles",
+                scope,
+                offer: detail.offer!,
+                parent: destination?.id ?? null,
+              },
+              "fileDrop",
+            );
+            if (useApp.getState().project?.id !== scope) return;
+            if (destination)
+              setExpanded((old) => new Set(old).add(destination.id));
+            const next = {
+              ids: new Set(result.entries.map((entry) => entry.id)),
+              anchor: result.entries[0]?.id ?? null,
+            };
+            if (
+              selectionTicket === userSelection.current &&
+              result.entries.length
+            ) {
+              selectionRef.current = next;
+              setSelection(next);
+              setPrimary(result.entries.at(-1) ?? null);
+            }
+            notice(
+              result.errors.length
+                ? result.errors.join("\n")
+                : `${result.entries.length} item(s) moved into the project.`,
+            );
+          } finally {
+            pending.current = false;
+            if (useApp.getState().project?.id === scope)
+              window.dispatchEvent(new Event("workspace-refresh"));
+          }
+        });
+    };
+    window.addEventListener("workspace-file-hover", hoverFiles);
+    window.addEventListener("workspace-file-drop", dropFiles);
+    return () => {
+      window.removeEventListener("workspace-file-hover", hoverFiles);
+      window.removeEventListener("workspace-file-drop", dropFiles);
+    };
+  });
   async function selectRepository() {
     if (!project || !selected) return;
     await rpc({
@@ -520,29 +764,34 @@ function Explorer({ active = true }: { active?: boolean }) {
         </>
       )}
       <Menu.Item
-        disabled={!selected || !project?.trusted}
+        disabled={selectedEntries.length !== 1 || !project?.trusted}
         onSelect={() => void perform(() => rename(false))}
       >
         Rename…
       </Menu.Item>
       <Menu.Item
-        disabled={!selected || !project?.trusted}
+        disabled={!selectedEntries.length || !project?.trusted}
         onSelect={() => void perform(() => rename(true))}
       >
         Move to folder…
       </Menu.Item>
       <Menu.Item
-        disabled={!selected || !project?.trusted}
+        disabled={!selectedEntries.length || !project?.trusted}
         onSelect={() => void perform(removeSelected)}
       >
         Delete…
       </Menu.Item>
       <Menu.Separator />
-      <FilePathMenuItems entry={selected?.id ?? null} />
+      <FilePathMenuItems
+        entry={selectedEntries.length === 1 ? (selected?.id ?? null) : null}
+      />
       <Menu.Separator />
       <Menu.Item
         disabled={
-          !selected || selected.kind !== "directory" || !project?.trusted
+          selectedEntries.length !== 1 ||
+          !selected ||
+          selected.kind !== "directory" ||
+          !project?.trusted
         }
         onSelect={() => void perform(selectRepository)}
       >
@@ -567,7 +816,7 @@ function Explorer({ active = true }: { active?: boolean }) {
           void perform(() => create(true));
           break;
         case "explorer.rename":
-          if (selected) void perform(() => rename(false));
+          if (selectedEntries.length === 1) void perform(() => rename(false));
           break;
         case "explorer.move":
           if (selected) void perform(() => rename(true));
@@ -593,9 +842,6 @@ function Explorer({ active = true }: { active?: boolean }) {
         role="toolbar"
         aria-label="File actions"
         data-file-drop="root"
-        onDragOver={(event) => dragOver(event, null)}
-        onDrop={(event) => dropEntry(event, null)}
-        onDragLeave={() => setDropTarget(null)}
       >
         <Menu.Root>
           <Menu.Trigger asChild>
@@ -702,6 +948,17 @@ function Explorer({ active = true }: { active?: boolean }) {
         </Menu.Portal>
       </Menu.Root>
       <VirtualList
+        multiple
+        onSelectAll={() => {
+          userSelection.current++;
+          const next = {
+            ids: new Set(rowEntries.map((entry) => entry.id)),
+            anchor: selectionRef.current.anchor ?? rowEntries[0]?.id ?? null,
+          };
+          selectionRef.current = next;
+          setSelection(next);
+          if (!selected) setPrimary(rowEntries[0] ?? null);
+        }}
         items={rows}
         onVisibleItemsChange={showEntries}
         revealIndex={
@@ -712,8 +969,10 @@ function Explorer({ active = true }: { active?: boolean }) {
         onRevealComplete={revealComplete}
         label="Project tree"
         onContextMenu={({ entry }, point) => {
+          userSelection.current++;
           cancelReveal();
-          setSelected(entry);
+          if (!selectionRef.current.ids.has(entry.id)) setSelected(entry);
+          setPrimary(entry);
           setContext(point);
         }}
         tree={{
@@ -736,63 +995,62 @@ function Explorer({ active = true }: { active?: boolean }) {
               if (rows[i].depth < rows[index].depth) return i;
             return index;
           },
-          focus: (r) => {
-            cancelReveal();
-            setSelected(r.entry);
+          focus: (r, event) => {
+            if (!event.metaKey && !event.ctrlKey) select(r.entry, event);
           },
         }}
-        selected={(r) => r.entry.id === selected?.id}
+        selected={(r) => selection.ids.has(r.entry.id)}
+        onDoubleClick={({ entry }, event) => {
+          if (
+            suppressClick.current ||
+            event.shiftKey ||
+            event.metaKey ||
+            event.ctrlKey
+          )
+            return;
+          if (entry.kind === "directory")
+            void perform(() => toggleFolder(entry));
+          else void perform(() => loadDocument(entry.id));
+        }}
         render={({ entry, depth }) => (
           <span
             className={`tree-label ${dropTarget === entry.id ? "drop-target" : ""}`}
-            draggable={
-              !!project?.trusted &&
-              (entry.kind === "file" || entry.kind === "directory")
-            }
             data-file-entry={entry.id}
             data-file-kind={entry.kind}
             data-git-status={decorations.get(entry.id)?.status}
-            onDragStart={(event) => {
-              if (!project) return;
-              event.stopPropagation();
-              dragging.current = entry;
-              setSelected(entry);
-              if ((event.target as HTMLElement).closest(".tree-toggle")) {
-                event.preventDefault();
+            onPointerDown={(event) => {
+              if (
+                event.button !== 0 ||
+                (event.target as HTMLElement).closest(".tree-toggle")
+              )
                 return;
-              }
-              event.dataTransfer.effectAllowed = "copyMove";
-              event.dataTransfer.dropEffect = "move";
-              event.dataTransfer.setData(
-                fileDragMime,
-                JSON.stringify({
-                  scope: project.id,
-                  id: entry.id,
-                  kind: entry.kind,
-                }),
+              suppressClick.current = false;
+              cancelArm.current?.();
+              if (
+                !selectionRef.current.ids.has(entry.id) &&
+                !event.shiftKey &&
+                !event.metaKey &&
+                !event.ctrlKey
+              )
+                select(entry, plain);
+              const scope = project?.id;
+              if (!scope || !["file", "directory"].includes(entry.kind)) return;
+              // Freeze the pressed selection: refreshes or a late drop response
+              // must not change which files cross the native drag threshold.
+              const sources = selectionRoots(
+                selectionRef.current.ids.has(entry.id)
+                  ? Object.values(childrenRef.current)
+                      .flat()
+                      .filter((item) => selectionRef.current.ids.has(item.id))
+                  : [entry],
               );
-            }}
-            onDragEnd={() => {
-              dragging.current = null;
-              setDropTarget(null);
-              clearTimeout(hover.current);
-            }}
-            onDragOver={(event) => {
-              if (entry.kind === "directory") dragOver(event, entry);
-            }}
-            onDragLeave={() => {
-              setDropTarget(null);
-              clearTimeout(hover.current);
-            }}
-            onDrop={(event) => {
-              if (entry.kind === "directory") dropEntry(event, entry);
+              cancelArm.current = armFileDrag(event.nativeEvent, () => {
+                suppressClick.current = true;
+                void perform(() => startFileDrag(scope, sources));
+              });
             }}
             style={{ paddingLeft: depth * 14 }}
             title={entry.path}
-            onDoubleClick={() => {
-              if (entry.kind === "directory")
-                void perform(() => toggleFolder(entry));
-            }}
           >
             {entry.kind === "directory" ? (
               <>
@@ -844,10 +1102,19 @@ function Explorer({ active = true }: { active?: boolean }) {
             )}
           </span>
         )}
-        onSelect={({ entry }) => {
-          cancelReveal();
-          setSelected(entry);
-          if (entry.kind !== "directory")
+        onSelect={({ entry }, event) => {
+          if (suppressClick.current && event.type === "click") {
+            suppressClick.current = false;
+            return;
+          }
+          select(entry, event);
+          if (
+            event.type === "keydown" &&
+            !event.shiftKey &&
+            !event.metaKey &&
+            !event.ctrlKey &&
+            entry.kind !== "directory"
+          )
             void perform(() => loadDocument(entry.id));
         }}
       />

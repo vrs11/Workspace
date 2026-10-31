@@ -6,11 +6,14 @@ import {
   useEffect,
   useMemo,
   type ReactNode,
+  type MouseEvent,
+  type KeyboardEvent,
 } from "react";
 export function VirtualList<T>({
   items,
   render,
   onSelect,
+  onDoubleClick,
   onContextMenu,
   label,
   selected,
@@ -22,10 +25,15 @@ export function VirtualList<T>({
   onVisibleItemsChange,
   revealIndex,
   onRevealComplete,
+  multiple = false,
+  onSelectAll,
 }: {
   items: T[];
   render: (item: T, index: number) => ReactNode;
-  onSelect: (item: T) => void;
+  onSelect: (item: T, event: MouseEvent | KeyboardEvent) => void;
+  onDoubleClick?: (item: T, event: MouseEvent) => void;
+  multiple?: boolean;
+  onSelectAll?: () => void;
   onContextMenu?: (item: T, point: { x: number; y: number }) => void;
   label: string;
   selected?: (item: T) => boolean;
@@ -42,7 +50,7 @@ export function VirtualList<T>({
     expand: (item: T) => void;
     collapse: (item: T) => void;
     parent: (index: number) => number;
-    focus?: (item: T) => void;
+    focus?: (item: T, event: KeyboardEvent) => void;
   };
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -106,18 +114,28 @@ export function VirtualList<T>({
       className="virtual-list"
       role={tree ? "tree" : "listbox"}
       aria-label={label}
+      aria-multiselectable={multiple || undefined}
       tabIndex={0}
       aria-activedescendant={
         items.length ? `${baseId}-${focusIndex}` : undefined
       }
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
+        if (
+          onSelectAll &&
+          (e.metaKey || e.ctrlKey) &&
+          e.key.toLowerCase() === "a"
+        ) {
+          e.preventDefault();
+          onSelectAll();
+          return;
+        }
         const move = (next: number) => {
           if (!items.length) return;
           next = Math.max(0, Math.min(items.length - 1, next));
           setFocus(next);
           virtual.scrollToIndex(next);
-          if (tree) tree.focus?.(items[next]);
+          if (tree) tree.focus?.(items[next], e);
         };
         if (e.key === "Home" || e.key === "End") {
           e.preventDefault();
@@ -167,7 +185,7 @@ export function VirtualList<T>({
         }
         if ((e.key === "Enter" || e.key === " ") && items[focusIndex]) {
           e.preventDefault();
-          onSelect(items[focusIndex]);
+          onSelect(items[focusIndex], e);
         }
       }}
     >
@@ -202,11 +220,16 @@ export function VirtualList<T>({
                   }
                 : undefined
             }
-            onClick={() => {
+            onClick={(event) => {
               setFocus(row.index);
               ref.current?.focus();
-              onSelect(items[row.index]);
+              onSelect(items[row.index], event);
             }}
+            onDoubleClick={
+              onDoubleClick
+                ? (event) => onDoubleClick(items[row.index], event)
+                : undefined
+            }
           >
             {render(items[row.index], row.index)}
           </div>
