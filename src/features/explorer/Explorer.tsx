@@ -14,7 +14,12 @@ import {
 } from "lucide-react";
 import type { Entry } from "../../generated/protocol";
 import { call, rpc } from "../../shared/ipc/client";
-import { useApp, perform, notice } from "../../shared/state/store";
+import { useApp, perform, notice, reportError } from "../../shared/state/store";
+import {
+  prepareRenamedBranch,
+  applyRenamedBranch,
+  renamedIds,
+} from "./renameTree";
 import { armFileDrag, startFileDrag, type FileDrop } from "./fileDrag";
 import {
   selectEntries,
@@ -62,6 +67,7 @@ function Explorer({ active = true }: { active?: boolean }) {
   const revealing = useRef(false);
   const [revealBusy, setRevealBusy] = useState(false);
   const [revealId, setRevealId] = useState<string | null>(null);
+  const revealScroll = useRef(true);
   const revealComplete = useCallback(() => setRevealId(null), []);
   useEffect(() => {
     revealing.current = false;
@@ -103,6 +109,9 @@ function Explorer({ active = true }: { active?: boolean }) {
     setSelection(next);
   };
   const pending = useRef(false);
+  const loadEpoch = useRef(0);
+  const renameOwner = useRef<symbol | null>(null);
+  const renamingTree = useRef(false);
   const cancelArm = useRef<(() => void) | null>(null);
   const suppressClick = useRef(false);
   const [context, setContext] = useState<{ x: number; y: number } | null>(null);
@@ -118,28 +127,46 @@ function Explorer({ active = true }: { active?: boolean }) {
   );
   const load = useCallback(
     async (parent: string | null) => {
-      if (!project || useApp.getState().project?.id !== project.id) return;
-      const r = await call(
-        { type: "list", scope: project.id, parent },
-        "entries",
-      );
-      if (useApp.getState().project?.id !== project.id) return;
+      if (
+        !project ||
+        renamingTree.current ||
+        useApp.getState().project?.id !== project.id
+      )
+        return false;
+      const epoch = loadEpoch.current;
+      const current = () =>
+        epoch === loadEpoch.current &&
+        useApp.getState().project?.id === project.id;
+      let r;
+      try {
+        r = await call({ type: "list", scope: project.id, parent }, "entries");
+      } catch (error) {
+        if (!current()) return false;
+        throw error;
+      }
+      if (!current()) return false;
       setChildren((c) => ({ ...c, [parent ?? "root"]: r.entries }));
       if (r.truncated)
         useApp.getState().set({
           notice:
             "Directory display capped at 10,000 entries. Use Quick open to narrow results.",
         });
+      return true;
     },
     [project?.id],
   );
   useEffect(() => {
+    const epoch = ++loadEpoch.current;
+    renameOwner.current = null;
+    renamingTree.current = false;
+    pending.current = false;
     setChildren({});
     cancelArm.current?.();
     setSelected(null);
     void perform(async () => {
-      await load(null);
+      if (!(await load(null))) return;
       for (const id of expandedRef.current) {
+        if (loadEpoch.current !== epoch) return;
         try {
           await load(id);
         } catch (error) {
@@ -158,13 +185,33 @@ function Explorer({ active = true }: { active?: boolean }) {
         }
       }
     });
-    const refresh = () =>
+    const refresh = (event: Event) =>
       void perform(async () => {
-        await load(null);
-        for (const id of expandedRef.current) await load(id);
+        try {
+          const epoch = loadEpoch.current;
+          if (!(await load(null))) return;
+          for (const id of expandedRef.current) {
+            if (loadEpoch.current !== epoch || renamingTree.current) return;
+            if (!(await load(id))) return;
+          }
+        } catch (error) {
+          if (
+            event instanceof CustomEvent &&
+            event.detail === "rename-complete"
+          )
+            reportError(error, {
+              prefix:
+                "Renamed successfully, but Explorer could not fully refresh. ",
+            });
+          else throw error;
+        }
       });
     window.addEventListener("workspace-refresh", refresh);
-    return () => window.removeEventListener("workspace-refresh", refresh);
+    return () => {
+      loadEpoch.current++;
+      renameOwner.current = null;
+      window.removeEventListener("workspace-refresh", refresh);
+    };
   }, [load]);
   const { rows, parents, paths } = useMemo(() => {
     const rows: { entry: Entry; depth: number }[] = [];
@@ -242,6 +289,7 @@ function Explorer({ active = true }: { active?: boolean }) {
     revealing.current = false;
     setRevealBusy(false);
     setRevealId(null);
+    revealScroll.current = true;
   };
   async function revealActive() {
     const entry = activeFileEntry();
@@ -300,6 +348,7 @@ function Explorer({ active = true }: { active?: boolean }) {
           new Set([...old, ...chain.slice(0, -1).map((item) => item.id)]),
       );
       setSelected(target);
+      revealScroll.current = true;
       setRevealId(target.id);
     } finally {
       if (ticket === revealEpoch.current) {
@@ -345,7 +394,8 @@ function Explorer({ active = true }: { active?: boolean }) {
     return project ? closeAffectedEntry(project.id, entry) : false;
   }
   async function rename(move: boolean) {
-    if (!project || !selected) return;
+    if (!project || !selected || pending.current) return;
+    const scope = project.id;
     let target: string | null;
     if (move) {
       const directories = rows.filter(
@@ -404,27 +454,111 @@ function Explorer({ active = true }: { active?: boolean }) {
           );
       },
     });
-    if (!name) return;
-    await settleModelLoads();
-    const reopen = isOpenFile(selected.id);
-    if (!(await closeAffected(selected))) return;
-    const result = await call(
-      {
-        type: "rename",
-        scope: project.id,
-        entry: selected.id,
-        parent: target,
-        name,
-      },
-      "entries",
-    );
-    const moved = result.entries.find((e) => e.name === name);
-    setSelected(moved ?? null);
-    if (reopen && selected.kind === "file" && moved)
-      await loadDocument(moved.id);
-    setChildren({});
-    setExpanded(new Set());
-    await load(null);
+    if (!name || useApp.getState().project?.id !== scope) return;
+    if (!move && name === selected.name) return;
+    const owner = Symbol("rename");
+    renameOwner.current = owner;
+    pending.current = true;
+    const current = () =>
+      renameOwner.current === owner && useApp.getState().project?.id === scope;
+    let requested = false;
+    let renamed = false;
+    try {
+      await settleModelLoads();
+      if (!current()) return;
+      const reopen = isOpenFile(selected.id);
+      if (!(await closeAffected(selected)) || !current()) return;
+      cancelReveal();
+      renamingTree.current = true;
+      loadEpoch.current++;
+      const cached = childrenRef.current;
+      requested = true;
+      const result = await call(
+        { type: "rename", scope, entry: selected.id, parent: target, name },
+        "entries",
+      );
+      renamed = true;
+      if (!current()) return;
+      const moved = result.entries.find((entry) => entry.name === name);
+      const update = await prepareRenamedBranch(
+        cached,
+        selected,
+        moved,
+        target,
+        result.entries,
+        async (parent) =>
+          (await call({ type: "list", scope, parent }, "entries")).entries,
+        current,
+      );
+      if (!update || !current()) return;
+      childrenRef.current = applyRenamedBranch(childrenRef.current, update);
+      setChildren((old) => applyRenamedBranch(old, update));
+      if ([...expandedRef.current].some((id) => update.removed.has(id)))
+        setExpanded((old) => {
+          const next = renamedIds(old, update);
+          expandedRef.current = next;
+          return next;
+        });
+      const ids = renamedIds(selectionRef.current.ids, update);
+      const previousAnchor = selectionRef.current.anchor;
+      const anchor = previousAnchor
+        ? (update.replacements.get(previousAnchor)?.id ?? previousAnchor)
+        : null;
+      const selection = {
+        ids,
+        anchor:
+          anchor && ids.has(anchor)
+            ? anchor
+            : (ids.values().next().value ?? null),
+      };
+      selectionRef.current = selection;
+      setSelection(selection);
+      setPrimary((old) =>
+        old
+          ? (update.replacements.get(old.id) ??
+            (update.removed.has(old.id) ? null : old))
+          : old,
+      );
+      const tree = document.querySelector<HTMLElement>(
+        '.explorer [aria-label="Project tree"]',
+      );
+      if (tree && document.activeElement === tree) {
+        const focused = document
+          .getElementById(tree.getAttribute("aria-activedescendant") ?? "")
+          ?.querySelector<HTMLElement>("[data-file-entry]")?.dataset.fileEntry;
+        const replacement = focused
+          ? update.replacements.get(focused)
+          : undefined;
+        if (replacement) {
+          revealScroll.current = false;
+          setRevealId(replacement.id);
+        }
+      }
+      if (update.errors.length)
+        reportError(update.errors[0], {
+          prefix:
+            "Renamed successfully, but some expanded folders could not refresh. ",
+        });
+      else if (!moved)
+        notice(
+          "Renamed successfully. The item is outside this directory's listing limit; use Quick open to locate it.",
+        );
+      if (reopen && selected.kind === "file" && moved && current())
+        await loadDocument(moved.id);
+    } finally {
+      if (renameOwner.current === owner) {
+        renameOwner.current = null;
+        renamingTree.current = false;
+        pending.current = false;
+        loadEpoch.current++;
+        if (requested && useApp.getState().project?.id === scope)
+          window.dispatchEvent(
+            new CustomEvent("workspace-refresh", {
+              detail: renamed ? "rename-complete" : null,
+            }),
+          );
+      }
+    }
   }
   function pruneEntries(targets: Entry[]) {
     const separator = navigator.platform.includes("Win") ? "\\" : "/";
@@ -805,8 +939,8 @@ function Explorer({ active = true }: { active?: boolean }) {
         return next;
       });
     else {
-      await load(entry.id);
-      setExpanded((old) => new Set(old).add(entry.id));
+      if (await load(entry.id))
+        setExpanded((old) => new Set(old).add(entry.id));
     }
   }
   useEffect(() => {
@@ -1096,6 +1230,7 @@ function Explorer({ active = true }: { active?: boolean }) {
             ? rows.findIndex((row) => row.entry.id === revealId)
             : undefined
         }
+        revealScroll={revealScroll.current}
         onRevealComplete={revealComplete}
         label="Project tree"
         onContextMenu={({ entry }, point) => {
@@ -1111,8 +1246,8 @@ function Explorer({ active = true }: { active?: boolean }) {
             r.entry.kind === "directory" ? expanded.has(r.entry.id) : undefined,
           expand: (r) =>
             void perform(async () => {
-              await load(r.entry.id);
-              setExpanded((old) => new Set(old).add(r.entry.id));
+              if (await load(r.entry.id))
+                setExpanded((old) => new Set(old).add(r.entry.id));
             }),
           collapse: (r) =>
             setExpanded((old) => {

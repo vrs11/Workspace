@@ -24,6 +24,7 @@ export function VirtualList<T>({
   fitContent = false,
   onVisibleItemsChange,
   revealIndex,
+  revealScroll = true,
   onRevealComplete,
   multiple = false,
   onSelectAll,
@@ -43,6 +44,7 @@ export function VirtualList<T>({
   fitContent?: boolean;
   onVisibleItemsChange?: (items: T[]) => void;
   revealIndex?: number;
+  revealScroll?: boolean;
   onRevealComplete?: () => void;
   tree?: {
     level: (item: T) => number;
@@ -93,11 +95,18 @@ export function VirtualList<T>({
       revealIndex >= items.length
     )
       return;
-    virtual.scrollToIndex(revealIndex, { align: "center" });
+    if (revealScroll) virtual.scrollToIndex(revealIndex, { align: "center" });
     setFocus(revealIndex);
     ref.current?.focus({ preventScroll: true });
     onRevealComplete?.();
-  }, [revealIndex, items.length, virtual, setFocus, onRevealComplete]);
+  }, [
+    revealIndex,
+    revealScroll,
+    items.length,
+    virtual,
+    setFocus,
+    onRevealComplete,
+  ]);
   return (
     <div
       ref={ref}
